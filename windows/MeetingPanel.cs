@@ -1,0 +1,626 @@
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Text.Json;
+using System.Windows.Forms;
+
+namespace Munin;
+
+/// <summary>Dot/severity of a recording row.</summary>
+internal enum JobTone { Busy, Good, Warn, Bad, Muted }
+
+/// <summary>
+/// A compact, Notion-styled meeting-recorder control for a spare / 3rd monitor. Top row = icon ·
+/// "Meeting" · live time (left) and a red Record / Stop pill (right). The body is a live voice-level
+/// meter (mic + system audio) that is FLAT when idle and animates while recording. The MAIN control is
+/// only ever Idle or Recording — it is NEVER blocked by processing.
+///
+/// Below that is a PERSISTENT list of the <see cref="DisplayMax"/> most recent recordings (newest first,
+/// survives restarts via <c>recent.json</c>). Each row shows the meeting's NAME (the Odin note title, once
+/// filed; the live status before that), the time it was recorded, and a ✕ to STOP an in-flight recording's
+/// processing (transcribe/file) if it isn't worth keeping. Starting a new meeting pushes a new row on top
+/// and drops the oldest off the list. So you can start the next meeting while a previous one transcribes.
+/// Click the pill = start/stop (<see cref="RecordToggleRequested"/>); click a row's ✕ = cancel
+/// (<see cref="CancelRequested"/>). Drag to move; right-click to hide.
+/// </summary>
+internal sealed class MeetingPanel : Form
+{
+    public event Action? RecordToggleRequested;
+    /// <summary>Raised with a job id when the user clicks ✕ on an in-flight row.</summary>
+    public event Action<int>? CancelRequested;
+    /// <summary>Raised when the user confirms the two-click discard (trash) while recording: stop AND
+    /// delete the audio — no transcription, no filing.</summary>
+    public event Action? DiscardRequested;
+
+    private bool _recording;
+    private bool _discardArmed;
+    private DateTime _discardArmedAt;
+    private bool _discardHover;
+    private DateTime _startedLocal;
+    private string _readyClock = "";
+    private bool _btnHover;
+    private bool _dragging;
+    private bool _dragMoved;
+    private Point _dragOrigin;
+    private int _hoverCancelId = -1;
+
+    private sealed class Entry
+    {
+        public int Id;
+        public string Stamp = "";
+        public DateTime Started;
+        public string? Title;                 // the Odin note name, set once filed
+        public string Status = "Transcribing…";
+        public JobTone Tone = JobTone.Busy;
+        public bool Cancelable = true;        // true only while transcribing / filing
+    }
+
+    private const int DisplayMax = 8;
+    private readonly List<Entry> _entries = new();   // newest first
+    private int _nextJobId;
+
+    // recent.json is written OFF the UI thread (the snapshot is built on it). A monotonic seq lets the
+    // newest snapshot win so out-of-order background writes can't persist stale state.
+    private long _saveSeq;
+    private string? _pendingJson;
+    private readonly object _saveLock = new();
+
+    private readonly float[] _wave;
+    private float _incoming;
+
+    private readonly System.Windows.Forms.Timer _tick = new() { Interval = 55 };
+    private readonly Font _titleFont = new("Segoe UI Semibold", 10.5f);
+    private readonly Font _subFont = new("Segoe UI", 9f);
+    private readonly Font _pillFont = new("Segoe UI Semibold", 9.5f);
+    private readonly Font _footFont = new("Segoe UI", 8f);
+    private readonly Font _rowNameFont = new("Segoe UI Semibold", 9f);
+    private readonly Font _rowMetaFont = new("Segoe UI", 8f);
+
+    private static readonly Color Bg = Color.FromArgb(30, 30, 32);
+    private static readonly Color Border = Color.FromArgb(20, 255, 255, 255);
+    private static readonly Color Divider = Color.FromArgb(16, 255, 255, 255);
+    private static readonly Color TitleCol = Color.FromArgb(234, 234, 236);
+    private static readonly Color RowName = Color.FromArgb(214, 214, 218);
+    private static readonly Color Muted = Color.FromArgb(140, 140, 144);
+    private static readonly Color VMuted = Color.FromArgb(104, 104, 108);
+    private static readonly Color Red = Color.FromArgb(224, 72, 77);
+    private static readonly Color RedHover = Color.FromArgb(236, 92, 96);
+    private static readonly Color Amber = Color.FromArgb(226, 170, 92);
+    private static readonly Color Green = Color.FromArgb(122, 196, 143);
+    private static readonly Color Skeleton = Color.FromArgb(34, 255, 255, 255); // muted placeholder bar on the dark bg
+
+    private const int BaseH = 112;
+    private const int MeterCy = 50;   // mic-level meter center (raised — the meter is shorter now)
+    private const int JobsDividerY = 80;
+    private const int JobsTop = 84;
+    private const int RowH = 38;       // original recent-row height (the header, not the rows, was trimmed)
+    private const int BottomPad = 8;
+
+    public MeetingPanel()
+    {
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        TopMost = true;
+        StartPosition = FormStartPosition.Manual;
+        DoubleBuffered = true;
+        BackColor = Bg;
+        Size = new Size(372, BaseH);
+
+        _wave = new float[Math.Max(8, (Width - 32) / 6)];
+        _readyClock = DateTime.Now.ToString("h:mm tt");
+
+        LoadRecent();
+        RecalcHeight();
+        ApplyRegion();
+
+        _tick.Tick += OnTick;
+        _tick.Start();
+
+        _ = Handle;
+        Visible = false;
+    }
+
+    // ---- layout ----
+    private Rectangle IconTile => new(15, 13, 22, 22);
+    private Rectangle Pill => _recording
+        ? new Rectangle(Width - 14 - 80, 11, 80, 28)
+        : new Rectangle(Width - 14 - 96, 11, 96, 28);
+    /// <summary>The discard (trash) button — only while recording; sits left of the Stop pill. Icon-sized so
+    /// it never collides with the elapsed-time header text.</summary>
+    private Rectangle TrashRect => new(Width - 14 - 80 - 8 - 28, 11, 28, 28);
+
+    // ---- public API ----
+    public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; BringToFront(); });
+    public void HidePanel() => Ui(() => { SavePosition(); if (Visible) Hide(); });
+
+    public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; _readyClock = DateTime.Now.ToString("h:mm tt"); Invalidate(); });
+    public void ShowRecording(DateTime startedLocal) => Ui(() => { _recording = true; _discardArmed = false; _startedLocal = startedLocal; Array.Clear(_wave); _incoming = 0; if (!Visible) { RestorePosition(); Show(); } Invalidate(); });
+
+    /// <summary>Add a recording row on top (newest first) for a finished capture; returns its id. Starts as
+    /// a cancelable "Transcribing…". Older rows beyond <see cref="DisplayMax"/> drop off the list.</summary>
+    public int AddJob(string stamp, DateTime started)
+    {
+        int id = System.Threading.Interlocked.Increment(ref _nextJobId);
+        Ui(() =>
+        {
+            _entries.Insert(0, new Entry { Id = id, Stamp = stamp, Started = started });
+            Trim();
+            SaveRecent();
+            RecalcHeight();
+        });
+        return id;
+    }
+
+    public void SetJobStatus(int id, string status, JobTone tone, bool cancelable) => Ui(() =>
+    {
+        var j = _entries.Find(x => x.Id == id);
+        if (j == null) return;
+        j.Status = status; j.Tone = tone; j.Cancelable = cancelable;
+        SaveRecent();
+        Invalidate();
+    });
+
+    /// <summary>Name the recording (the Odin note title) once it's been filed.</summary>
+    public void SetJobTitle(int id, string? title) => Ui(() =>
+    {
+        var j = _entries.Find(x => x.Id == id);
+        if (j == null || string.IsNullOrWhiteSpace(title)) return;
+        j.Title = title.Trim();
+        SaveRecent();
+        Invalidate();
+    });
+
+    /// <summary>Push a live input level (0..1) into the meter. Thread-safe (single float write).</summary>
+    public void SetLevel(float level01)
+    {
+        float v = Math.Clamp((float)Math.Sqrt(Math.Max(0f, level01)) * 1.6f, 0f, 1f);
+        if (v > _incoming) _incoming = v;
+    }
+
+    private void Trim()
+    {
+        while (_entries.Count > DisplayMax)
+        {
+            // Drop the OLDEST finished row; never strand an in-flight row (and its ✕ cancel handle) when a
+            // completed row could go instead. Only drop a still-cancelable row if every row is in-flight.
+            int drop = _entries.Count - 1;
+            for (int i = _entries.Count - 1; i >= 0; i--)
+                if (!_entries[i].Cancelable) { drop = i; break; }
+            _entries.RemoveAt(drop);
+        }
+    }
+
+    private void OnTick(object? sender, EventArgs e)
+    {
+        Array.Copy(_wave, 1, _wave, 0, _wave.Length - 1);
+        _wave[^1] = _incoming;
+        _incoming *= 0.55f;
+        // A first trash click ARMS the discard; it disarms itself after a few seconds un-confirmed.
+        if (_discardArmed && (DateTime.Now - _discardArmedAt).TotalSeconds > 3.5) { _discardArmed = false; Invalidate(); }
+        if (_recording || _wave.Any(v => v > 0.01f)) Invalidate();
+    }
+
+    // ---- painting ----
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        g.Clear(Bg);
+
+        using (var bp = Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 14))
+        using (var pen = new Pen(Border)) g.DrawPath(pen, bp);
+
+        DrawHeader(g);
+        DrawMeter(g, 16, Width - 16, MeterCy);
+
+        using (var dp = new Pen(Divider)) g.DrawLine(dp, 16, 60, Width - 16, 60);
+        // The footer doubles as the discard confirm hint while the trash is armed (icon-only button → the
+        // hint is what makes the two-click contract legible).
+        (string foot, Color footCol) = _recording && _discardArmed
+            ? ("Click the trash again to DELETE this recording.", Red)
+            : ("Make sure everyone consents to being recorded.", VMuted);
+        TextRenderer.DrawText(g, foot, _footFont,
+            new Rectangle(16, 64, Width - 32, 14), footCol, TextFormatFlags.NoPrefix | TextFormatFlags.Left);
+
+        DrawEntries(g);
+    }
+
+    private void DrawHeader(Graphics g)
+    {
+        using (var tile = new SolidBrush(Color.FromArgb(44, 44, 47)))
+        using (var tp = Rounded(IconTile, 6)) g.FillPath(tile, tp);
+        using (var dot = new SolidBrush(_recording ? Red : Color.FromArgb(150, 150, 154)))
+            g.FillEllipse(dot, IconTile.X + 7, IconTile.Y + 7, 8, 8);
+
+        TextRenderer.DrawText(g, "Meeting", _titleFont, new Point(46, 14), TitleCol, TextFormatFlags.NoPrefix);
+        int tw = TextRenderer.MeasureText(g, "Meeting", _titleFont).Width;
+        (string sub, Color col) = _recording ? ($"·  REC  {Elapsed()}", Red) : ($"·  {_readyClock}", Muted);
+        TextRenderer.DrawText(g, sub, _subFont, new Point(46 + tw + 6, 16), col, TextFormatFlags.NoPrefix);
+
+        DrawActionPill(g, Pill, _recording);
+        if (_recording) DrawTrash(g, TrashRect, _discardHover, _discardArmed);
+    }
+
+    // The discard (trash) button: ghost while idle-armed=false; red-filled once ARMED (first click) so the
+    // destructive second click is visually loud. Icon-only — the footer line carries the confirm hint.
+    private void DrawTrash(Graphics g, Rectangle rect, bool hover, bool armed)
+    {
+        if (armed)
+        {
+            using var fb = new SolidBrush(hover ? RedHover : Red);
+            using var fp = Rounded(rect, 8);
+            g.FillPath(fb, fp);
+        }
+        else if (hover)
+        {
+            using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
+            using var hp = Rounded(rect, 8);
+            g.FillPath(hb, hp);
+        }
+        var col = armed ? Color.White : (hover ? RedHover : Muted);
+        int cx = rect.X + rect.Width / 2, cy = rect.Y + rect.Height / 2;
+        using var pen = new Pen(col, 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        // lid + handle
+        g.DrawLine(pen, cx - 6, cy - 4, cx + 6, cy - 4);
+        g.DrawLine(pen, cx - 2, cy - 6, cx + 2, cy - 6);
+        // can body + two ribs
+        g.DrawLines(pen, new[] { new Point(cx - 4, cy - 4), new Point(cx - 3, cy + 6), new Point(cx + 3, cy + 6), new Point(cx + 4, cy - 4) });
+        g.DrawLine(pen, cx - 1, cy - 1, cx - 1, cy + 3);
+        g.DrawLine(pen, cx + 1, cy - 1, cx + 1, cy + 3);
+    }
+
+    // red pill with a manually-centered record dot / stop square + label
+    private void DrawActionPill(Graphics g, Rectangle rect, bool isStop)
+    {
+        using (var b = new SolidBrush(_btnHover ? RedHover : Red))
+        using (var pp = Rounded(rect, 8)) g.FillPath(b, pp);
+
+        string text = isStop ? "Stop" : "Record";
+        const int glyph = 9, gap = 7;
+        int tw = TextRenderer.MeasureText(g, text, _pillFont, Size.Empty, TextFormatFlags.NoPadding).Width;
+        int total = glyph + gap + tw;
+        int sx = rect.X + (rect.Width - total) / 2;
+        int cy = rect.Y + rect.Height / 2;
+
+        using (var w = new SolidBrush(Color.White))
+        {
+            if (isStop) { using var sq = Rounded(new Rectangle(sx, cy - glyph / 2, glyph, glyph), 2); g.FillPath(w, sq); }
+            else g.FillEllipse(w, sx, cy - glyph / 2, glyph, glyph);
+        }
+        TextRenderer.DrawText(g, text, _pillFont, new Rectangle(sx + glyph + gap, rect.Y, tw + 6, rect.Height),
+            Color.White, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
+    }
+
+    private void DrawMeter(Graphics g, int x0, int x1, int cy)
+    {
+        const int step = 6, barW = 3, maxH = 14;
+        int n = Math.Min(_wave.Length, (x1 - x0) / step);
+        for (int i = 0; i < n; i++)
+        {
+            float lvl = _wave[_wave.Length - n + i];
+            float h = Math.Max(2f, lvl * maxH);
+            int a = 30 + (int)(170 * Math.Min(1f, lvl));
+            using var br = new SolidBrush(Color.FromArgb(a, 232, 232, 236));
+            using var bar = Rounded(new RectangleF(x0 + i * step, cy - h / 2f, barW, h), 1.5f);
+            g.FillPath(br, bar);
+        }
+    }
+
+    private void DrawEntries(Graphics g)
+    {
+        // Fixed-size panel: always the divider + DisplayMax row slots. A slot with a recording renders it;
+        // an empty slot renders a skeleton placeholder so the window is a constant height regardless of count.
+        using (var dp = new Pen(Divider)) g.DrawLine(dp, 16, JobsDividerY, Width - 16, JobsDividerY);
+
+        for (int i = 0; i < DisplayMax; i++)
+        {
+            int top = JobsTop + i * RowH;
+            if (i < _entries.Count) DrawEntryRow(g, _entries[i], i, top);
+            else DrawSkeletonRow(g, i, top);
+        }
+    }
+
+    private void DrawEntryRow(Graphics g, Entry entry, int i, int top)
+    {
+        using (var d = new SolidBrush(ToneColor(entry.Tone)))
+            g.FillEllipse(d, 19, top + 15, 7, 7);
+
+        bool cancelable = entry.Cancelable;
+        int rightPad = cancelable ? 40 : 16;
+        int nameW = Width - 34 - rightPad;
+
+        // Line 1 = the meeting NAME (Odin note title) once known; the live status before that.
+        string name = entry.Title ?? entry.Status;
+        Color nameCol = entry.Title != null ? TitleCol : RowName;
+        TextRenderer.DrawText(g, name, _rowNameFont, new Rectangle(34, top + 4, nameW, 16), nameCol,
+            TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+
+        // Line 2 = recorded time, plus the status when the name line is already the title.
+        string meta = entry.Title != null ? $"{entry.Started:h:mm tt}  ·  {entry.Status}" : $"{entry.Started:h:mm tt}";
+        TextRenderer.DrawText(g, meta, _rowMetaFont, new Rectangle(34, top + 21, nameW, 14), Muted,
+            TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+
+        if (cancelable) DrawCancel(g, CancelRect(i), entry.Id == _hoverCancelId);
+    }
+
+    // An empty slot's skeleton: a muted dot + two rounded "loading" bars (name + meta line), widths lightly
+    // varied per slot so the empty state reads as placeholders rather than real data.
+    private static readonly float[] SkelName = { 0.62f, 0.50f, 0.68f, 0.55f, 0.60f, 0.47f, 0.64f, 0.52f };
+    private void DrawSkeletonRow(Graphics g, int i, int top)
+    {
+        int nameW = Width - 34 - 16;
+        using var sk = new SolidBrush(Skeleton);
+        using (var dot = Rounded(new RectangleF(19, top + 14, 7, 7), 3.5f)) g.FillPath(sk, dot);
+        using (var b1 = Rounded(new RectangleF(34, top + 7, nameW * SkelName[i % SkelName.Length], 8), 4f)) g.FillPath(sk, b1);
+        using (var b2 = Rounded(new RectangleF(34, top + 22, nameW * 0.34f, 7), 3.5f)) g.FillPath(sk, b2);
+    }
+
+    // a small ✕ to stop an in-flight recording's processing
+    private void DrawCancel(Graphics g, Rectangle hit, bool hover)
+    {
+        if (hover)
+        {
+            using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
+            using var hp = Rounded(hit, 6);
+            g.FillPath(hb, hp);
+        }
+        var c = new Point(hit.X + hit.Width / 2, hit.Y + hit.Height / 2);
+        const int r = 4;
+        using var pen = new Pen(hover ? RedHover : Muted, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        g.DrawLine(pen, c.X - r, c.Y - r, c.X + r, c.Y + r);
+        g.DrawLine(pen, c.X - r, c.Y + r, c.X + r, c.Y - r);
+    }
+
+    private Rectangle CancelRect(int index)
+    {
+        int top = JobsTop + index * RowH;
+        return new Rectangle(Width - 36, top + 8, 22, 22);
+    }
+
+    private static Color ToneColor(JobTone t) => t switch
+    {
+        JobTone.Good => Green,
+        JobTone.Bad => Red,
+        JobTone.Muted => Muted,
+        _ => Amber, // Busy / Warn
+    };
+
+    private void RecalcHeight()
+    {
+        // FIXED size, always: the header + DisplayMax row slots. Slots without a recording render as skeleton
+        // placeholders (see DrawSkeletonRow), so the window height never changes with how many meetings exist.
+        int h = JobsTop + DisplayMax * RowH + BottomPad;
+        if (Height != h) { Height = h; ApplyRegion(); }
+        Invalidate();
+    }
+
+    private void ApplyRegion()
+    {
+        using var p = Rounded(new Rectangle(0, 0, Width, Height), 14);
+        Region = new Region(p);
+    }
+
+    private string Elapsed()
+    {
+        var t = DateTime.Now - _startedLocal;
+        return $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
+    }
+
+    // ---- mouse ----
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.Right) { HidePanel(); return; }
+        if (e.Button != MouseButtons.Left) return;
+        if (Pill.Contains(e.Location)) { RecordToggleRequested?.Invoke(); return; }
+        if (_recording && TrashRect.Contains(e.Location))
+        {
+            if (_discardArmed) { _discardArmed = false; DiscardRequested?.Invoke(); }
+            else { _discardArmed = true; _discardArmedAt = DateTime.Now; }
+            Invalidate();
+            return;
+        }
+        for (int i = 0; i < _entries.Count; i++)
+        {
+            if (_entries[i].Cancelable && CancelRect(i).Contains(e.Location))
+            {
+                CancelRequested?.Invoke(_entries[i].Id);
+                return;
+            }
+        }
+        _dragging = true;
+        _dragMoved = false;
+        _dragOrigin = e.Location;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (_dragging)
+        {
+            _dragMoved = true;
+            Location = new Point(Location.X + e.X - _dragOrigin.X, Location.Y + e.Y - _dragOrigin.Y);
+            return;
+        }
+        bool b = Pill.Contains(e.Location);
+        if (b != _btnHover) { _btnHover = b; Invalidate(); }
+        bool th = _recording && TrashRect.Contains(e.Location);
+        if (th != _discardHover) { _discardHover = th; Invalidate(); }
+
+        int hover = -1;
+        for (int i = 0; i < _entries.Count; i++)
+            if (_entries[i].Cancelable && CancelRect(i).Contains(e.Location)) { hover = _entries[i].Id; break; }
+        if (hover != _hoverCancelId) { _hoverCancelId = hover; Invalidate(); }
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if (_dragging) { _dragging = false; if (_dragMoved) SavePosition(); }
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (_dragging) return;
+        bool changed = _btnHover || _discardHover || _hoverCancelId != -1;
+        _btnHover = false;
+        _discardHover = false;
+        _hoverCancelId = -1;
+        if (changed) Invalidate();
+    }
+
+    // ---- recent-recordings persistence (so the last 5 survive a restart) ----
+    private sealed record EntryDto(string Stamp, string Started, string? Title, string Status, int Tone);
+
+    private static string RecentFile => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", "Meetings", "recent.json");
+
+    private void SaveRecent()
+    {
+        string json;
+        try
+        {
+            // Snapshot on the UI thread (reads _entries); only the file write moves off-thread.
+            var dto = _entries.Take(DisplayMax).Select(j =>
+                new EntryDto(j.Stamp, j.Started.ToString("o"), j.Title, j.Status, (int)j.Tone)).ToList();
+            json = JsonSerializer.Serialize(dto);
+        }
+        catch { return; }
+
+        long mySeq;
+        lock (_saveLock) { mySeq = ++_saveSeq; _pendingJson = json; }
+        _ = Task.Run(() => FlushRecent(mySeq));
+    }
+
+    private void FlushRecent(long seq)
+    {
+        // The whole flush is under _saveLock, so writes serialize; a superseded snapshot bails.
+        lock (_saveLock)
+        {
+            if (seq != _saveSeq || _pendingJson is null) return;
+            var json = _pendingJson;
+            _pendingJson = null;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(RecentFile)!);
+                File.WriteAllText(RecentFile, json);
+            }
+            catch { /* non-fatal */ }
+        }
+    }
+
+    private void LoadRecent()
+    {
+        try
+        {
+            if (!File.Exists(RecentFile)) return;
+            var dto = JsonSerializer.Deserialize<List<EntryDto>>(File.ReadAllText(RecentFile));
+            if (dto == null) return;
+            foreach (var d in dto.Take(DisplayMax))
+            {
+                try
+                {
+                    if (!DateTime.TryParse(d.Started, null, System.Globalization.DateTimeStyles.RoundtripKind, out var started))
+                        started = DateTime.Now;
+                    // A row left mid-processing at the last shutdown has no live job behind it — show it as
+                    // interrupted rather than a fake in-flight one (no cancel handle exists for it).
+                    var status = d.Status ?? "";
+                    bool inFlight = status.EndsWith("…");
+                    var tone = inFlight ? JobTone.Muted
+                        : (Enum.IsDefined(typeof(JobTone), d.Tone) ? (JobTone)d.Tone : JobTone.Muted);
+                    _entries.Add(new Entry
+                    {
+                        Id = System.Threading.Interlocked.Increment(ref _nextJobId),
+                        Stamp = d.Stamp ?? "",
+                        Started = started,
+                        Title = d.Title,
+                        Status = inFlight ? "Interrupted" : (status.Length == 0 ? "Saved" : status),
+                        Tone = tone,
+                        Cancelable = false,
+                    });
+                }
+                catch { /* skip one bad row, keep the rest */ }
+            }
+        }
+        catch { _entries.Clear(); }
+    }
+
+    // ---- position persistence (defaults to the 3rd monitor) ----
+    private static string PosFile => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", "meeting_panel_pos.txt");
+
+    private void SavePosition()
+    {
+        try { Directory.CreateDirectory(Path.GetDirectoryName(PosFile)!); File.WriteAllText(PosFile, $"{Location.X},{Location.Y}"); }
+        catch { /* non-fatal */ }
+    }
+
+    public void RestorePosition()
+    {
+        try
+        {
+            if (File.Exists(PosFile))
+            {
+                var parts = File.ReadAllText(PosFile).Split(',');
+                if (parts.Length == 2 && int.TryParse(parts[0], out int x) && int.TryParse(parts[1], out int y))
+                {
+                    var pt = new Point(x, y);
+                    if (OnAScreen(pt)) { Location = pt; return; }
+                }
+            }
+        }
+        catch { /* fall through */ }
+        DefaultPlace();
+    }
+
+    private static bool OnAScreen(Point p) =>
+        Screen.AllScreens.Any(s => s.WorkingArea.Contains(new Rectangle(p, new Size(40, 40))));
+
+    private void DefaultPlace()
+    {
+        var screens = Screen.AllScreens;
+        var target = screens.Length >= 3 ? screens[2] : screens[^1];
+        var wa = target.WorkingArea;
+        Location = new Point(wa.Left + (wa.Width - Width) / 2, wa.Top + 48);
+    }
+
+    private void Ui(Action a)
+    {
+        if (IsDisposed || Disposing) return; // a late callback from an in-flight job after the panel is gone
+        if (IsHandleCreated && InvokeRequired)
+        {
+            // The panel can be disposed between the guard above and the marshal — swallow that race only.
+            try { BeginInvoke(a); }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+        }
+        else a();
+    }
+
+    private static GraphicsPath Rounded(RectangleF r, float radius)
+    {
+        float d = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static GraphicsPath Rounded(Rectangle r, int radius) => Rounded((RectangleF)r, radius);
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _tick.Dispose();
+            _titleFont.Dispose();
+            _subFont.Dispose();
+            _pillFont.Dispose();
+            _footFont.Dispose();
+            _rowNameFont.Dispose();
+            _rowMetaFont.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+}

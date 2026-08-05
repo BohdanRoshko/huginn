@@ -134,7 +134,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let me = try Transcriber.transcribe(url: capture.meURL, speaker: .me)
             let them = try Transcriber.transcribe(url: capture.themURL, speaker: .them)
-            let text = TranscriptBuilder.build(me: me, them: them, startedAt: capture.startedAt)
+            let text = TranscriptBuilder.build(
+                me: me,
+                them: them,
+                startedAt: capture.startedAt,
+                warnings: warnings(for: capture)
+            )
 
             let out = capture.meURL
                 .deletingLastPathComponent()
@@ -154,6 +159,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             log("transcription failed: \(error.localizedDescription)")
         }
+    }
+
+    /// An empty track still produces a perfectly readable one-sided transcript,
+    /// which is why this is checked explicitly rather than left for someone to
+    /// notice. Each case names the permission or device that actually failed.
+    private func warnings(for capture: Recorder.Capture) -> [String] {
+        var found: [String] = []
+
+        if capture.themFrames == 0 {
+            found.append(
+                "The other side of the call was NOT captured — this transcript only has your voice. "
+                + "Enable Huginn under System Settings > Privacy & Security > "
+                + "Screen & System Audio Recording, then quit and reopen Huginn."
+            )
+        }
+        if capture.meFrames == 0 {
+            found.append(
+                "Your microphone captured nothing. Check the input device, and that Huginn is "
+                + "enabled under System Settings > Privacy & Security > Microphone."
+            )
+        }
+
+        for warning in found {
+            log("WARNING: \(warning)")
+        }
+        return found
     }
 
     private func notifyDone(at url: URL) {

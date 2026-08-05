@@ -147,9 +147,20 @@ jobs:
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" \
             -restart -agent -privs -all
+          # Some clients (RealVNC among them) negotiate Apple's own auth scheme
+          # and demand a username, ignoring the legacy VNC password entirely. So
+          # set the account password too and let either path work.
+          #
+          # sysadminctl, not `dscl -passwd`: dscl insists on the existing
+          # password even under sudo, which CI cannot supply.
+          sudo sysadminctl -resetPasswordFor runner -newPassword "$VNC_PASSWORD" 2>&1 \
+            | grep -v '^$' || echo "::warning::account password not set; use a legacy-VNC client"
+
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
 
-          echo "screen sharing enabled (legacy VNC, password auth only)"
+          echo "screen sharing enabled"
+          echo "  legacy VNC : password only, first 8 chars"
+          echo "  Apple auth : username 'runner', the full password"
           sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "::warning::nothing listening on 5900 yet"
 
       # tailscale/github-action refuses to run here ("Support Linux Only"), so
@@ -198,8 +209,9 @@ jobs:
           echo "=================================================="
           echo " Connect with macOS Screen Sharing or any VNC client"
           echo "   address  : vnc://${TS_IP}:5900"
-          echo "   password : (the VNC_PASSWORD secret, first 8 chars)"
-          echo "   username : none — legacy VNC is password-only"
+          echo
+          echo "   TightVNC / TigerVNC : no username, password = first 8 chars"
+          echo "   RealVNC / Apple auth: username 'runner', the full password"
           echo "=================================================="
           echo "Huginn is at ~/Applications/Huginn.app — double-click it."
           echo "It is a menu bar app: look top-right, no Dock icon, no window."

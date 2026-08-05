@@ -5,6 +5,12 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+env:
+  # Pinned, not tracking main: an unpinned clone makes the build
+  # irreproducible and can break on an upstream commit that has nothing to do
+  # with us. Bump deliberately.
+  WHISPER_TAG: v1.9.2
+
 jobs:
   build:
     runs-on: macos-14
@@ -20,15 +26,27 @@ jobs:
           swift --version
           cmake --version
 
+      # The whisper build is by far the slowest step and only changes when the
+      # pinned tag does, so cache it — otherwise every Swift compile fix pays
+      # for a full rebuild.
+      - name: Restore cached whisper-cli
+        id: whisper-cache
+        uses: actions/cache@v4
+        with:
+          path: prebuilt/whisper-cli
+          key: whisper-cli-${{ env.WHISPER_TAG }}-arm64-metal-v1
+
       # whisper.cpp is built here rather than pulled from Homebrew so Metal is
       # compiled in with the shader library EMBEDDED. The Homebrew formula
       # leaves Metal off unless GGML_METAL_PATH_RESOURCES points at its share
       # directory, which cannot be relied on inside an app bundle — and without
       # Metal an M-series Mac transcribes roughly 5x slower.
       - name: Build whisper.cpp (arm64, Metal embedded)
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git whisper-src
+          git clone --depth 1 --branch "$WHISPER_TAG" \
+            https://github.com/ggml-org/whisper.cpp.git whisper-src
           cd whisper-src
           # arm64 only: the target machine is Apple Silicon. GGML_NATIVE stays
           # OFF so the binary is a baseline arm64 build rather than tuned to
@@ -71,7 +89,17 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/prebuilt"
           cp "$BIN" "$GITHUB_WORKSPACE/prebuilt/whisper-cli"
-          lipo -info "$GITHUB_WORKSPACE/prebuilt/whisper-cli"
+
+      # Runs on the cached path too, so a stale or truncated cache entry is
+      # caught here rather than shipped inside the app.
+      - name: Verify whisper-cli
+        run: |
+          set -euo pipefail
+          test -f prebuilt/whisper-cli || { echo "::error::whisper-cli missing"; exit 1; }
+          chmod +x prebuilt/whisper-cli
+          lipo -info prebuilt/whisper-cli
+          lipo -info prebuilt/whisper-cli | grep -q arm64 \
+            || { echo "::error::whisper-cli is not arm64"; exit 1; }
 
       - name: Build Huginn (arm64)
         run: |

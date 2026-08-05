@@ -1,0 +1,105 @@
+name: Build Huginn
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          swift --version
+          cmake --version
+
+      # whisper.cpp is built here rather than pulled from Homebrew so Metal is
+      # compiled in with the shader library EMBEDDED. The Homebrew formula
+      # leaves Metal off unless GGML_METAL_PATH_RESOURCES points at its share
+      # directory, which cannot be relied on inside an app bundle — and without
+      # Metal an M-series Mac transcribes roughly 5x slower.
+      - name: Build whisper.cpp (universal, Metal embedded)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git whisper-src
+          cd whisper-src
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_NATIVE=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DWHISPER_BUILD_SERVER=OFF
+          cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
+
+          # Binary name moved from `main` to `whisper-cli` upstream; accept either.
+          BIN=""
+          for candidate in build/bin/whisper-cli build/bin/main; do
+            if [ -f "$candidate" ]; then BIN="$candidate"; break; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "::error::whisper-cli was not produced"
+            find build -type f -perm +111 -maxdepth 3 || true
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/prebuilt"
+          cp "$BIN" "$GITHUB_WORKSPACE/prebuilt/whisper-cli"
+          lipo -info "$GITHUB_WORKSPACE/prebuilt/whisper-cli"
+
+      - name: Build Huginn (universal)
+        run: |
+          set -euo pipefail
+          swift build -c release --arch arm64 --arch x86_64
+          lipo -info .build/apple/Products/Release/Huginn
+
+      - name: Assemble Huginn.app
+        run: |
+          set -euo pipefail
+          APP="Huginn.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+          cp .build/apple/Products/Release/Huginn "$APP/Contents/MacOS/Huginn"
+          cp prebuilt/whisper-cli "$APP/Contents/Resources/whisper-cli"
+          cp Resources/Info.plist "$APP/Contents/Info.plist"
+          chmod +x "$APP/Contents/MacOS/Huginn" "$APP/Contents/Resources/whisper-cli"
+          printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+      # Ad-hoc signing is free and is all that is needed: Apple Silicon refuses
+      # to run an unsigned binary at all, while Gatekeeper's "unidentified
+      # developer" prompt is handled once on the user's side (see README).
+      # Hardened runtime is deliberately NOT enabled — it would require a real
+      # Developer ID to pair with entitlements for the microphone.
+      - name: Ad-hoc sign
+        run: |
+          set -euo pipefail
+          codesign --force --sign - --timestamp=none Huginn.app/Contents/Resources/whisper-cli
+          codesign --force --sign - --timestamp=none Huginn.app/Contents/MacOS/Huginn
+          codesign --force --sign - --timestamp=none Huginn.app
+          codesign --verify --deep --strict --verbose=2 Huginn.app
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          # ditto preserves the bundle structure and the executable bits, which
+          # a plain `zip` (and GitHub's own artifact zipping) does not.
+          ditto -c -k --keepParent Huginn.app Huginn.zip
+          ls -lh Huginn.zip
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Huginn-macOS
+          path: Huginn.zip
+          if-no-files-found: error

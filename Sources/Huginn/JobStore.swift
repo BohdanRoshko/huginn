@@ -1,0 +1,115 @@
+import Foundation
+
+/// The rolling list of recent meetings shown in the menu. Persisted so the list
+/// survives a restart, same as Munin's recent.json on Windows.
+struct Job: Codable, Identifiable {
+    enum Status: String, Codable {
+        case recording
+        case transcribing
+        case done
+        case failed
+        case cancelled
+    }
+
+    let id: UUID
+    let startedAt: Date
+    var status: Status
+    var detail: String?
+    var transcriptPath: String?
+
+    var title: String {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f.string(from: startedAt)
+    }
+
+    var statusLine: String {
+        switch status {
+        case .recording:    return "Recording…"
+        case .transcribing: return "Transcribing…"
+        case .done:         return "Ready"
+        case .failed:       return detail.map { "Failed — \($0)" } ?? "Failed"
+        case .cancelled:    return "Cancelled"
+        }
+    }
+}
+
+final class JobStore {
+    private(set) var jobs: [Job] = []
+    private let queue = DispatchQueue(label: "huginn.jobstore")
+    var onChange: (() -> Void)?
+
+    init() {
+        load()
+    }
+
+    func upsert(_ job: Job) {
+        queue.sync {
+            if let index = jobs.firstIndex(where: { $0.id == job.id }) {
+                jobs[index] = job
+            } else {
+                jobs.insert(job, at: 0)
+            }
+            trim()
+            persist()
+        }
+        DispatchQueue.main.async { [weak self] in self?.onChange?() }
+    }
+
+    func update(_ id: UUID, _ mutate: (inout Job) -> Void) {
+        queue.sync {
+            guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+            mutate(&jobs[index])
+            persist()
+        }
+        DispatchQueue.main.async { [weak self] in self?.onChange?() }
+    }
+
+    // MARK: - private
+
+    /// Drop the oldest FINISHED job first so an in-flight one is never lost
+    /// from the list while it is still working.
+    private func trim() {
+        while jobs.count > Config.recentLimit {
+            let finished = jobs.lastIndex { $0.status != .transcribing && $0.status != .recording }
+            jobs.remove(at: finished ?? jobs.count - 1)
+        }
+    }
+
+    private func persist() {
+        Paths.ensureDirectories()
+        guard let data = try? JSONEncoder.huginn.encode(jobs) else { return }
+        try? data.write(to: Paths.recentFile, options: .atomic)
+    }
+
+    private func load() {
+        guard let data = try? Data(contentsOf: Paths.recentFile),
+              let decoded = try? JSONDecoder.huginn.decode([Job].self, from: data) else { return }
+
+        // Anything still marked in-flight died with the previous process.
+        jobs = decoded.map { job in
+            guard job.status == .recording || job.status == .transcribing else { return job }
+            var recovered = job
+            recovered.status = .failed
+            recovered.detail = "interrupted"
+            return recovered
+        }
+    }
+}
+
+extension JSONEncoder {
+    static let huginn: JSONEncoder = {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }()
+}
+
+extension JSONDecoder {
+    static let huginn: JSONDecoder = {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }()
+}

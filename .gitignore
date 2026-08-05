@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+whisper-src/
+prebuilt/
+Huginn.app/
+Huginn.zip
+*.xcodeproj
+.DS_Store

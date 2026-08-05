@@ -1,0 +1,7 @@
+# Authored on Windows, built on a macOS runner — never let CRLF reach the
+# runner's shell steps or the Swift sources.
+* text=auto eol=lf
+*.swift text eol=lf
+*.yml   text eol=lf
+*.plist text eol=lf
+*.md    text eol=lf

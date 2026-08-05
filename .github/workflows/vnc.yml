@@ -156,6 +156,15 @@ jobs:
           # mechanism that works, so the client must support it.
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
 
+          # A headless runner sleeps its display while the job idles waiting for
+          # a connection, and a slept framebuffer serves BLACK over VNC — the
+          # desktop is fine, there is just nothing being drawn. Keep it awake for
+          # the whole session; caffeinate is backgrounded so it outlives this step.
+          sudo pmset -a displaysleep 0 sleep 0 disksleep 0 2>/dev/null || true
+          defaults -currentHost write com.apple.screensaver idleTime 0 2>/dev/null || true
+          nohup caffeinate -dimsu >/dev/null 2>&1 &
+          echo "display sleep disabled, caffeinate running"
+
           echo "screen sharing enabled — legacy VNC, PASSWORD ONLY (no username)"
           sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "::warning::nothing listening on 5900 yet"
 

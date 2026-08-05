@@ -1,0 +1,111 @@
+# Interactive macOS desktop on the CI runner, reachable over Tailscale.
+#
+# Manual dispatch only — it holds a runner open doing nothing but waiting for
+# you, so it must never fire on push.
+#
+# SECURITY: this joins a shared, public GitHub runner to your tailnet. Use an
+# EPHEMERAL, TAGGED auth key and an ACL that stops tag:ci initiating
+# connections to anything else on the network. Without that, a machine you do
+# not control can reach every device you own.
+
+name: VNC (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "How long to hold the desktop open (max 300)"
+        required: false
+        default: "45"
+
+env:
+  WHISPER_TAG: v1.9.2
+
+jobs:
+  desktop:
+    runs-on: macos-14
+    timeout-minutes: 310
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore cached whisper-cli
+        id: whisper-cache
+        uses: actions/cache@v4
+        with:
+          path: prebuilt/whisper-cli
+          key: whisper-cli-${{ env.WHISPER_TAG }}-arm64-metal-v1
+
+      - name: Build and assemble Huginn.app
+        run: |
+          set -euo pipefail
+          swift build -c release
+          swift build -c release --show-bin-path > .binpath
+
+          APP="$HOME/Applications/Huginn.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "$(cat .binpath)/Huginn" "$APP/Contents/MacOS/Huginn"
+          cp Resources/Info.plist "$APP/Contents/Info.plist"
+          printf 'APPL????' > "$APP/Contents/PkgInfo"
+
+          if [ -f prebuilt/whisper-cli ]; then
+            cp prebuilt/whisper-cli "$APP/Contents/Resources/whisper-cli"
+            chmod +x "$APP/Contents/Resources/whisper-cli"
+          else
+            echo "::warning::whisper-cli cache miss — transcription will not work in this session"
+          fi
+
+          chmod +x "$APP/Contents/MacOS/Huginn"
+          codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/Huginn" || true
+          codesign --force --sign - --timestamp=none "$APP" || true
+          echo "App at $APP"
+
+      # macOS screen sharing authenticates against a real account password, so
+      # the runner user gets one. It comes from a secret because this repository
+      # is public and workflow logs are readable by anyone.
+      - name: Enable screen sharing
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VNC_PASSWORD:-}" ]; then
+            echo "::error::VNC_PASSWORD secret is not set"
+            exit 1
+          fi
+          sudo dscl . -passwd /Users/runner "$VNC_PASSWORD"
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on -restart -agent -privs -all -allowAccessFor -allUsers
+          sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
+          echo "screen sharing enabled for user 'runner'"
+
+      - name: Join tailnet
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          args: --accept-routes=false --accept-dns=false
+
+      - name: Connection details
+        run: |
+          set -euo pipefail
+          echo "=================================================="
+          echo " Connect with macOS Screen Sharing or any VNC client"
+          echo "   address  : vnc://$(tailscale ip -4):5900"
+          echo "   username : runner"
+          echo "   password : (the VNC_PASSWORD secret)"
+          echo "=================================================="
+          echo "Huginn is at ~/Applications/Huginn.app — double-click it."
+          echo "It is a menu bar app: look top-right, no Dock icon, no window."
+
+      - name: Hold the desktop open
+        run: |
+          set -euo pipefail
+          MINUTES="${{ github.event.inputs.minutes }}"
+          if [ "$MINUTES" -gt 300 ] 2>/dev/null; then MINUTES=300; fi
+          echo "Holding for $MINUTES minutes. Cancel the run when finished."
+          for i in $(seq 1 "$MINUTES"); do
+            printf '.'
+            sleep 60
+          done
+          echo "time is up"

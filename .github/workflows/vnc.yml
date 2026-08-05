@@ -119,9 +119,13 @@ jobs:
           chmod +x "$HOME/Desktop/play-test-audio.command"
           echo "Desktop script ready"
 
-      # macOS screen sharing authenticates against a real account password, so
-      # the runner user gets one. It comes from a secret because this repository
-      # is public and workflow logs are readable by anyone.
+      # Uses ARD's own VNC password rather than the runner account's password:
+      # `dscl -passwd` demands the existing password even under sudo, which CI
+      # does not have. The legacy-VNC path sets a dedicated password and needs
+      # no account credentials at all.
+      #
+      # The password comes from a secret because this repository is public and
+      # workflow logs are readable by anyone.
       - name: Enable screen sharing
         env:
           VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
@@ -131,11 +135,22 @@ jobs:
             echo "::error::VNC_PASSWORD secret is not set"
             exit 1
           fi
-          sudo dscl . -passwd /Users/runner "$VNC_PASSWORD"
+
+          # Legacy VNC truncates at 8 characters. Do it deliberately here so the
+          # password that works is the one being derived, not a silent prefix.
+          PW="$(printf '%s' "$VNC_PASSWORD" | cut -c1-8)"
+          if [ "${#VNC_PASSWORD}" -gt 8 ]; then
+            echo "::warning::VNC_PASSWORD is longer than 8 characters; only the first 8 are used"
+          fi
+
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
-            -activate -configure -access -on -restart -agent -privs -all -allowAccessFor -allUsers
+            -activate -configure -access -on \
+            -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" \
+            -restart -agent -privs -all
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
-          echo "screen sharing enabled for user 'runner'"
+
+          echo "screen sharing enabled (legacy VNC, password auth only)"
+          sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "::warning::nothing listening on 5900 yet"
 
       - name: Join tailnet
         uses: tailscale/github-action@v2
@@ -149,8 +164,8 @@ jobs:
           echo "=================================================="
           echo " Connect with macOS Screen Sharing or any VNC client"
           echo "   address  : vnc://$(tailscale ip -4):5900"
-          echo "   username : runner"
-          echo "   password : (the VNC_PASSWORD secret)"
+          echo "   password : (the VNC_PASSWORD secret, first 8 chars)"
+          echo "   username : none — legacy VNC is password-only"
           echo "=================================================="
           echo "Huginn is at ~/Applications/Huginn.app — double-click it."
           echo "It is a menu bar app: look top-right, no Dock icon, no window."

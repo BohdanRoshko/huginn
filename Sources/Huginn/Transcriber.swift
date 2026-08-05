@@ -1,4 +1,5 @@
 import Foundation
+import HuginnCore
 
 /// Runs the whisper-cli binary bundled inside the app. Keeping transcription
 /// behind a subprocess boundary (rather than linking libwhisper) means the

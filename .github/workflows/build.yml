@@ -101,6 +101,12 @@ jobs:
           lipo -info prebuilt/whisper-cli | grep -q arm64 \
             || { echo "::error::whisper-cli is not arm64"; exit 1; }
 
+      # The de-echo logic is pure text in / text out, so unlike the audio path
+      # it can be verified without a Mac in hand. Expected values come from the
+      # original C# implementation, making this the guard on the port.
+      - name: Test HuginnCore
+        run: swift test --filter HuginnCoreTests
+
       - name: Build Huginn (arm64)
         run: |
           set -euo pipefail

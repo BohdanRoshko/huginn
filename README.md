@@ -144,11 +144,13 @@ Sources/Huginn/
 - **No diarization.** "Them" is everyone on the far side as one speaker, exactly
   like Munin Phase 1. Telling apart individual remote participants needs
   diarization (sherpa-onnx or pyannote) and is not built here.
-- **No echo removal.** If the meeting plays through speakers, the mic re-captures
-  the far side, so some of their speech also appears as `Me:` lines. Munin's
-  Windows counterpart solves this with a de-echo pass on ingest; that logic is
-  not ported. Using headphones avoids the problem entirely — worth telling
-  anyone who uses this.
+- **Echo removal is text-based, not acoustic.** On speakers the mic re-captures
+  the far side, so their lines come back as `Me:` lines. `TranscriptReconciler`
+  drops those by comparing each `Me` line against nearby `Them` speech, resting
+  on the invariant that the `Them` track cannot contain the local mic. It is
+  deliberately conservative — when unsure it keeps the line — so some echo can
+  survive, and the pre-de-echo text is kept as `*_transcript.raw.txt` whenever
+  anything was removed. Headphones still give the cleanest result.
 - **English only** by default (`Config.language`).
 - Transcription assumes both tracks start at the same instant. There is a small
   skew between the mic engine starting and the capture stream starting, so

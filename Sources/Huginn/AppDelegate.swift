@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import HuginnCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -141,10 +142,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 warnings: warnings(for: capture)
             )
 
-            let out = capture.meURL
-                .deletingLastPathComponent()
-                .appendingPathComponent(Paths.stamp(capture.startedAt) + "_transcript.txt")
-            try text.write(to: out, atomically: true, encoding: .utf8)
+            // On speakers the mic re-captures the far side, so most of their
+            // lines come back as "Me" lines. Without this the transcript reads
+            // fluently and is badly wrong about who said what.
+            let cleaned = TranscriptReconciler.deEcho(text)
+
+            let base = capture.meURL.deletingLastPathComponent()
+            let out = base.appendingPathComponent(Paths.stamp(capture.startedAt) + "_transcript.txt")
+            try cleaned.text.write(to: out, atomically: true, encoding: .utf8)
+
+            // Keep the pre-de-echo version only when something was actually
+            // dropped, so an over-aggressive removal is recoverable without
+            // littering a second file next to every clean recording.
+            if cleaned.removedEchoes > 0 {
+                let raw = base.appendingPathComponent(
+                    Paths.stamp(capture.startedAt) + "_transcript.raw.txt"
+                )
+                try? text.write(to: raw, atomically: true, encoding: .utf8)
+                log("de-echo removed \(cleaned.removedEchoes) of \(cleaned.meLines) Me lines "
+                    + "(\(cleaned.themLines) Them lines); raw kept alongside")
+            }
 
             jobs.update(capture.id) {
                 $0.status = .done

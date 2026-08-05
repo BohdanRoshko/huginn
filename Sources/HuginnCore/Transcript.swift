@@ -1,22 +1,28 @@
 import Foundation
 
-struct Segment {
-    enum Speaker: String {
+public struct Segment {
+    public enum Speaker: String {
         case me = "Me"
         case them = "Them"
     }
 
-    let speaker: Speaker
+    public let speaker: Speaker
     /// Milliseconds from the start of the recording.
-    let start: Int
-    let text: String
+    public let start: Int
+    public let text: String
+
+    public init(speaker: Speaker, start: Int, text: String) {
+        self.speaker = speaker
+        self.start = start
+        self.text = text
+    }
 }
 
-enum TranscriptBuilder {
+public enum TranscriptBuilder {
     /// Interleave both tracks by timestamp into the same `[hh:mm:ss] Me/Them:`
     /// shape Munin writes on Windows, so transcripts from either machine read
     /// identically and the same downstream tooling parses both.
-    static func build(
+    public static func build(
         me: [Segment],
         them: [Segment],
         startedAt: Date,
@@ -52,7 +58,7 @@ enum TranscriptBuilder {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    static func clock(_ milliseconds: Int) -> String {
+    public static func clock(_ milliseconds: Int) -> String {
         let total = max(0, milliseconds) / 1000
         return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
     }

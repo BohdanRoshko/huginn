@@ -1,4 +1,5 @@
 .build/
+.binpath
 .swiftpm/
 whisper-src/
 prebuilt/

@@ -34,6 +34,7 @@ cost is that system audio sits behind the Screen Recording permission.
 
 ## Requirements
 
+- **Apple Silicon** (M1 or newer) — the build is arm64 only, no Intel slice
 - macOS 13 Ventura or newer
 - ~2 GB free disk for the speech model (downloaded once, on first launch)
 
@@ -94,6 +95,18 @@ Homebrew, because the Homebrew formula leaves Metal disabled unless
 bundle, and without Metal an M-series Mac transcribes about 5x slower. Building
 with `GGML_METAL_EMBED_LIBRARY=ON` puts the shaders in the binary and removes
 the problem entirely.
+
+Metal is treated as a build requirement, not a preference: the workflow asserts
+`GGML_METAL` and `GGML_METAL_EMBED_LIBRARY` actually stuck in `CMakeCache.txt`
+and fails the build if either did not, so a silently CPU-only binary can never
+reach a user. `GGML_NATIVE` is left OFF so the result is a baseline arm64 build
+rather than one tuned to whichever M-series chip the runner happened to be;
+that setting is CPU tuning and has no bearing on Metal.
+
+Output is **arm64 only**. There is no Intel slice — it would not run on an Intel
+Mac at all. Adding one means restoring `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
+and building Swift with `--arch arm64 --arch x86_64`, which also moves the
+SwiftPM output path, so the assemble step would need updating too.
 
 Signing is ad-hoc (`codesign --sign -`), which is free. Apple Silicon refuses to
 run a completely unsigned binary, but ad-hoc is enough; Gatekeeper's

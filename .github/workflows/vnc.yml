@@ -147,20 +147,16 @@ jobs:
             -activate -configure -access -on \
             -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$PW" \
             -restart -agent -privs -all
-          # Some clients (RealVNC among them) negotiate Apple's own auth scheme
-          # and demand a username, ignoring the legacy VNC password entirely. So
-          # set the account password too and let either path work.
-          #
-          # sysadminctl, not `dscl -passwd`: dscl insists on the existing
-          # password even under sudo, which CI cannot supply.
-          sudo sysadminctl -resetPasswordFor runner -newPassword "$VNC_PASSWORD" 2>&1 \
-            | grep -v '^$' || echo "::warning::account password not set; use a legacy-VNC client"
-
+          # Account-password auth is NOT possible here, so do not try. Both
+          # routes to setting one are blocked on a CI runner:
+          #   dscl -passwd       -> eDSAuthFailed, wants the existing password
+          #   sysadminctl        -> "not permitted without secure token unlock"
+          # The secure token needs a token-holding admin's existing password,
+          # which CI has no way to obtain. Legacy VNC password auth is the only
+          # mechanism that works, so the client must support it.
           sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null || true
 
-          echo "screen sharing enabled"
-          echo "  legacy VNC : password only, first 8 chars"
-          echo "  Apple auth : username 'runner', the full password"
+          echo "screen sharing enabled — legacy VNC, PASSWORD ONLY (no username)"
           sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "::warning::nothing listening on 5900 yet"
 
       # tailscale/github-action refuses to run here ("Support Linux Only"), so
@@ -209,9 +205,12 @@ jobs:
           echo "=================================================="
           echo " Connect with macOS Screen Sharing or any VNC client"
           echo "   address  : vnc://${TS_IP}:5900"
+          echo "   username : NONE — there is no username, and none can exist"
+          echo "   password : first 8 characters of the VNC_PASSWORD secret"
           echo
-          echo "   TightVNC / TigerVNC : no username, password = first 8 chars"
-          echo "   RealVNC / Apple auth: username 'runner', the full password"
+          echo " Use TightVNC, TigerVNC or UltraVNC. RealVNC will NOT connect:"
+          echo " it demands Apple account auth, which cannot be enabled on a CI"
+          echo " runner (setting an account password needs a secure token)."
           echo "=================================================="
           echo "Huginn is at ~/Applications/Huginn.app — double-click it."
           echo "It is a menu bar app: look top-right, no Dock icon, no window."

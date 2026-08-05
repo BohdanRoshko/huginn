@@ -203,6 +203,55 @@ jobs:
           print('OK - JSON contract matches Transcriber.swift, and the words came back')
           PY
 
+      # There is no Mac on the authoring side, so this is the only way to see
+      # what the app actually looks like before a user does. The runner has a
+      # real window server, so the app can be launched, its menu opened, and the
+      # screen photographed.
+      #
+      # Best-effort: if the runner image ever stops providing a GUI session this
+      # should not fail the build, since it proves appearance, not correctness.
+      - name: Screenshot the UI
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          SUPPORT="$HOME/Library/Application Support/Huginn"
+          mkdir -p "$SUPPORT/Models" "$SUPPORT/Recordings" shots
+
+          # A placeholder model file makes the downloader report "ready", so the
+          # menu renders in its normal idle state instead of first-run
+          # "downloading". Nothing reads it — the app is never asked to transcribe.
+          touch "$SUPPORT/Models/ggml-large-v3-turbo.bin"
+
+          # Two finished meetings so the Recent section renders as it would in use.
+          cat > "$SUPPORT/recent.json" <<'JSON'
+          [
+            {"id":"6B29FC40-CA47-1067-B31D-00DD010662DA","startedAt":"2026-08-05T09:15:00Z","status":"done","transcriptPath":"/tmp/a_transcript.txt"},
+            {"id":"6B29FC40-CA47-1067-B31D-00DD010662DB","startedAt":"2026-08-04T14:02:00Z","status":"done","transcriptPath":"/tmp/b_transcript.txt"}
+          ]
+          JSON
+
+          HUGINN_UI_PROBE=1 open -a "$PWD/Huginn.app" || open "$PWD/Huginn.app"
+          sleep 8
+
+          screencapture -x shots/full.png || echo "screencapture failed"
+          # The menu bar lives at the top; crop for a legible close-up.
+          if [ -f shots/full.png ]; then
+            sips -c 900 1800 --cropOffset 0 700 shots/full.png --out shots/menubar.png >/dev/null 2>&1 || true
+            sips -g pixelWidth -g pixelHeight shots/full.png
+          fi
+
+          pkill -x Huginn || true
+          ls -la shots/
+
+      - name: Upload screenshots
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: Huginn-screenshots
+          path: shots/
+          if-no-files-found: warn
+
       - name: Package
         run: |
           set -euo pipefail

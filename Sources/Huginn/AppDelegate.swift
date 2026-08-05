@@ -26,11 +26,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         downloader.onChange = { [weak self] _ in self?.rebuildMenu() }
 
         // Pull the model down in the background on first launch so the first
-        // real meeting is not stuck behind a 1.6 GB download.
+        // real meeting is not stuck behind a 1.6 GB download. (Skipped when the
+        // model file is already present, which is how the UI probe below avoids
+        // fetching 1.6 GB on a CI runner.)
         downloader.startIfNeeded()
 
         updateIcon()
         rebuildMenu()
+
+        // CI-only: open the menu so `screencapture` has something to photograph.
+        // There is no other way to see this UI without a Mac in hand — a menu
+        // bar app cannot be driven from a script without Accessibility consent,
+        // which CI cannot grant.
+        if ProcessInfo.processInfo.environment["HUGINN_UI_PROBE"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.statusItem.button?.performClick(nil)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

@@ -252,6 +252,47 @@ jobs:
           path: shots/
           if-no-files-found: warn
 
+      # Live capture is the ONE thing no other check can reach: it needs
+      # permissions a user grants interactively and audio hardware a runner may
+      # not have. This drives the real path and reports what happened.
+      #
+      # continue-on-error by design. A permission refusal here is INFORMATION,
+      # not a defect — it would mean only a real user can exercise this, which
+      # is worth knowing but must not block shipping.
+      - name: Probe live audio capture
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          set -uo pipefail
+          SUPPORT="$HOME/Library/Application Support/Huginn"
+          mkdir -p "$SUPPORT/Models" "$SUPPORT/Recordings"
+
+          # base.en under the production filename: whisper loads by content, and
+          # this keeps the probe off a 1.6GB download.
+          if [ ! -s "$SUPPORT/Models/ggml-large-v3-turbo.bin" ]; then
+            curl -sSL --fail -o /tmp/base.en.bin \
+              https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+            cp /tmp/base.en.bin "$SUPPORT/Models/ggml-large-v3-turbo.bin"
+          fi
+
+          set +e
+          HUGINN_SELFTEST=1 ./Huginn.app/Contents/MacOS/Huginn 2>&1 | tee /tmp/selftest.log
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          echo "=================================================="
+          case "$STATUS" in
+            0) echo "CAPTURE WORKS on this runner — audio recorded and transcribed" ;;
+            2) echo "Recording could not START. If permissions were refused, that is"
+               echo "expected in CI and means only a real user can verify capture." ;;
+            5) echo "Capture ran but both tracks were SILENT — no usable audio hardware." ;;
+            *) echo "Self-test exited $STATUS — see the log above." ;;
+          esac
+          echo "=================================================="
+
+          grep -E "them track|me   track|authorization" /tmp/selftest.log || true
+          exit 0
+
       - name: Package
         run: |
           set -euo pipefail

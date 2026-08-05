@@ -34,6 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateIcon()
         rebuildMenu()
 
+        // CI-only: drive a whole record/transcribe cycle and exit, to find out
+        // whether audio capture actually works on this machine.
+        if ProcessInfo.processInfo.environment["HUGINN_SELFTEST"] == "1" {
+            let recorder = self.recorder
+            Task { await SelfTest.run(recorder: recorder) }
+            return
+        }
+
         // CI-only: open the menu so `screencapture` has something to photograph.
         // There is no other way to see this UI without a Mac in hand — a menu
         // bar app cannot be driven from a script without Accessibility consent,

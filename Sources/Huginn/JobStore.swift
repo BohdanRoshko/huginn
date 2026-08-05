@@ -17,10 +17,18 @@ struct Job: Codable, Identifiable {
     var detail: String?
     var transcriptPath: String?
 
+    /// Time alone is ambiguous the moment the list spans days — two entries
+    /// reading "9:15 AM" and "2:02 PM" give no clue they are from different
+    /// meetings on different dates. Today stays bare; anything older says so.
     var title: String {
         let f = DateFormatter()
-        f.dateStyle = .none
         f.timeStyle = .short
+        if Calendar.current.isDateInToday(startedAt) {
+            f.dateStyle = .none
+        } else {
+            f.dateStyle = .short
+            f.doesRelativeDateFormatting = true   // "Yesterday 2:02 PM"
+        }
         return f.string(from: startedAt)
     }
 

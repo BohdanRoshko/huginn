@@ -26,9 +26,20 @@ if (-not $ghExe) {
     $ghExe = $ghExe.Source
 }
 
-$run = & $ghExe run list --limit 1 --status success `
+# Resolve the repo from THIS repository's remote, never from the working
+# directory: gh infers the repo from cwd, so running this from another checkout
+# silently queries that project instead.
+$originUrl = & git -C $repoRoot remote get-url origin 2>$null
+if (-not $originUrl) { throw "No 'origin' remote in $repoRoot." }
+if ($originUrl -notmatch '(?:github\.com[:/])([^/]+/[^/]+?)(?:\.git)?$') {
+    throw "Could not parse a GitHub owner/repo out of '$originUrl'."
+}
+$repoSlug = $Matches[1]
+Write-Host "Repository: $repoSlug" -ForegroundColor DarkGray
+
+$run = & $ghExe run list --repo $repoSlug --limit 1 --status success `
     --json databaseId,displayTitle,headSha,createdAt | ConvertFrom-Json
-if (-not $run) { throw 'No successful runs found.' }
+if (-not $run) { throw "No successful runs found for $repoSlug." }
 
 $runId = $run[0].databaseId
 Write-Host "Latest successful build" -ForegroundColor Cyan
@@ -40,7 +51,7 @@ $staging = Join-Path ([System.IO.Path]::GetTempPath()) "huginn_build_$runId"
 if (Test-Path $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 
-& $ghExe run download $runId -n Huginn-macOS -D $staging | Out-Null
+& $ghExe run download $runId --repo $repoSlug -n Huginn-macOS -D $staging | Out-Null
 $fresh = Join-Path $staging 'Huginn.zip'
 if (-not (Test-Path $fresh)) { throw "Artifact did not contain Huginn.zip (run $runId)." }
 

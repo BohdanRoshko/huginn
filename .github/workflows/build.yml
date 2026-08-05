@@ -143,6 +143,66 @@ jobs:
           codesign --force --sign - --timestamp=none Huginn.app
           codesign --verify --deep --strict --verbose=2 Huginn.app
 
+      # The runner is a real Apple Silicon Mac, so the transcription half can be
+      # exercised for real rather than assumed. macOS ships `say`, so we can
+      # synthesise known speech, push it through the SHIPPED binary, and check
+      # the words come back. This is what proves the JSON contract in
+      # Transcriber.swift is right — if the shape is wrong, every transcript in
+      # the app comes back silently empty.
+      #
+      # Uses base.en (142MB) rather than the app's large-v3-turbo (1.6GB): the
+      # CLI flags, JSON shape and Metal path are identical, and the smaller
+      # model keeps the job fast.
+      - name: Verify transcription end-to-end
+        run: |
+          set -euo pipefail
+          WHISPER="Huginn.app/Contents/Resources/whisper-cli"
+
+          say -o /tmp/probe.aiff "The quarterly inventory report is ready for review."
+          afconvert -f WAVE -d LEI16@16000 /tmp/probe.aiff /tmp/probe.wav
+          afinfo /tmp/probe.wav | head -5
+
+          curl -sSL --fail -o /tmp/ggml-base.en.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+          ls -lh /tmp/ggml-base.en.bin
+
+          # Keep whisper's own prints: the backend banner tells us whether
+          # Metal actually engaged on this hardware.
+          "$WHISPER" -m /tmp/ggml-base.en.bin -f /tmp/probe.wav \
+            -l en -oj -of /tmp/probe 2>&1 | tee /tmp/whisper.out
+
+          echo "--- backend ---"
+          grep -iE "metal|gpu|backend" /tmp/whisper.out || echo "(no backend line found)"
+
+          echo "--- raw json ---"
+          cat /tmp/probe.json
+
+          # Assert exactly what Sources/Huginn/Transcriber.swift decodes.
+          python3 - <<'PY'
+          import json, sys
+          with open('/tmp/probe.json') as fh:
+              doc = json.load(fh)
+
+          segments = doc.get('transcription')
+          assert segments, 'no "transcription" array — Transcriber.swift would decode nothing'
+
+          for seg in segments:
+              assert 'text' in seg, f'segment missing "text": {seg}'
+              offsets = seg.get('offsets')
+              assert offsets is not None, f'segment missing "offsets": {seg}'
+              for key in ('from', 'to'):
+                  assert key in offsets, f'offsets missing "{key}": {offsets}'
+                  assert isinstance(offsets[key], int), \
+                      f'offsets.{key} is {type(offsets[key]).__name__}, Swift decodes Int'
+
+          text = ' '.join(s['text'] for s in segments).lower()
+          print('TRANSCRIBED:', text.strip())
+
+          missing = [w for w in ('quarterly', 'inventory', 'report') if w not in text]
+          assert not missing, f'transcription lost expected words: {missing}'
+          print('OK - JSON contract matches Transcriber.swift, and the words came back')
+          PY
+
       - name: Package
         run: |
           set -euo pipefail

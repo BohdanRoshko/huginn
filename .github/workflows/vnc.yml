@@ -152,18 +152,52 @@ jobs:
           echo "screen sharing enabled (legacy VNC, password auth only)"
           sudo lsof -iTCP:5900 -sTCP:LISTEN || echo "::warning::nothing listening on 5900 yet"
 
+      # tailscale/github-action refuses to run here ("Support Linux Only"), so
+      # the daemon is installed and started by hand.
+      #
+      # A real utun interface is required, NOT --tun=userspace-networking: that
+      # mode cannot accept inbound connections to local ports, which is the
+      # entire point here (reaching VNC on 5900).
       - name: Join tailnet
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-          args: --accept-routes=false --accept-dns=false
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TS_AUTHKEY:-}" ]; then
+            echo "::error::TS_AUTHKEY secret is not set"
+            exit 1
+          fi
+
+          brew install tailscale >/dev/null
+
+          sudo tailscaled --state=/tmp/ts.state --socket=/tmp/ts.sock \
+            >/tmp/tailscaled.log 2>&1 &
+
+          for i in $(seq 1 20); do
+            [ -S /tmp/ts.sock ] && break
+            sleep 1
+          done
+          if [ ! -S /tmp/ts.sock ]; then
+            echo "::error::tailscaled did not start"
+            cat /tmp/tailscaled.log || true
+            exit 1
+          fi
+
+          sudo tailscale --socket=/tmp/ts.sock up \
+            --authkey="$TS_AUTHKEY" \
+            --hostname=huginn-ci \
+            --accept-routes=false \
+            --accept-dns=false
+
+          sudo tailscale --socket=/tmp/ts.sock status || true
 
       - name: Connection details
         run: |
           set -euo pipefail
+          TS_IP="$(sudo tailscale --socket=/tmp/ts.sock ip -4 | head -1)"
           echo "=================================================="
           echo " Connect with macOS Screen Sharing or any VNC client"
-          echo "   address  : vnc://$(tailscale ip -4):5900"
+          echo "   address  : vnc://${TS_IP}:5900"
           echo "   password : (the VNC_PASSWORD secret, first 8 chars)"
           echo "   username : none — legacy VNC is password-only"
           echo "=================================================="

@@ -238,8 +238,13 @@ jobs:
 
           # Second pass in the RECORDING state: the menu bar clock only exists
           # while recording, so an idle shot cannot show whether it renders.
-          HUGINN_UI_PROBE=recording open -a "$PWD/Huginn.app" || true
-          sleep 12
+          # Launched DIRECTLY, not via `open`: an app started by `open` gets its
+          # own TCC identity and blocks on the microphone consent dialog, which
+          # is what the first attempt photographed instead of the clock. Running
+          # the binary inherits the runner shell's already-granted context, the
+          # same way the self-test does.
+          HUGINN_UI_PROBE=recording ./Huginn.app/Contents/MacOS/Huginn >/tmp/uiprobe.log 2>&1 &
+          sleep 14
           screencapture -x shots/recording.png || echo "screencapture failed (recording)"
           pkill -x Huginn || true
 

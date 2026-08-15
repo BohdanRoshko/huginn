@@ -232,15 +232,20 @@ jobs:
 
           HUGINN_UI_PROBE=1 open -a "$PWD/Huginn.app" || open "$PWD/Huginn.app"
           sleep 8
-
-          screencapture -x shots/full.png || echo "screencapture failed"
-          # The menu bar lives at the top; crop for a legible close-up.
-          if [ -f shots/full.png ]; then
-            sips -c 900 1800 --cropOffset 0 700 shots/full.png --out shots/menubar.png >/dev/null 2>&1 || true
-            sips -g pixelWidth -g pixelHeight shots/full.png
-          fi
-
+          screencapture -x shots/idle.png || echo "screencapture failed (idle)"
           pkill -x Huginn || true
+          sleep 2
+
+          # Second pass in the RECORDING state: the menu bar clock only exists
+          # while recording, so an idle shot cannot show whether it renders.
+          HUGINN_UI_PROBE=recording open -a "$PWD/Huginn.app" || true
+          sleep 12
+          screencapture -x shots/recording.png || echo "screencapture failed (recording)"
+          pkill -x Huginn || true
+
+          for f in shots/*.png; do
+            [ -f "$f" ] && sips -g pixelWidth -g pixelHeight "$f"
+          done
           ls -la shots/
 
       - name: Upload screenshots

@@ -46,9 +46,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // There is no other way to see this UI without a Mac in hand — a menu
         // bar app cannot be driven from a script without Accessibility consent,
         // which CI cannot grant.
-        if ProcessInfo.processInfo.environment["HUGINN_UI_PROBE"] == "1" {
+        let probe = ProcessInfo.processInfo.environment["HUGINN_UI_PROBE"]
+        if probe == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                 self?.statusItem.button?.performClick(nil)
+            }
+        } else if probe == "recording" {
+            // Photograph the RECORDING state. The menu bar clock is the whole
+            // point of this indicator, and it only exists while recording, so
+            // an idle screenshot can never show whether it works.
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                try? await self.recorder.start()
+                self.recordingStarted = Date()
+                self.startTicking()
+                self.updateIcon()
+                self.rebuildMenu()
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                self.statusItem.button?.performClick(nil)
             }
         }
     }
@@ -355,8 +370,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Rolls over to h:mm:ss past an hour. A forgotten recording showing
+    /// "1:47:03" reads as obviously wrong in a way "107:03" does not.
     private func elapsed(since date: Date) -> String {
         let seconds = Int(Date().timeIntervalSince(date))
+        if seconds >= 3600 {
+            return String(format: "%d:%02d:%02d", seconds / 3600, (seconds % 3600) / 60, seconds % 60)
+        }
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 
@@ -366,12 +386,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         image?.isTemplate = !recorder.isRecording
         statusItem.button?.image = image
         statusItem.button?.contentTintColor = recorder.isRecording ? .systemRed : nil
+        updateButtonTitle()
+    }
+
+    /// The running clock lives in the MENU BAR, not just inside the menu.
+    /// A red dot alone is easy to stop noticing among a dozen other icons —
+    /// and it says nothing about how long this has been going. A timer that
+    /// visibly climbs past an hour is what actually gets noticed.
+    private func updateButtonTitle() {
+        guard let button = statusItem.button else { return }
+        guard recorder.isRecording, let started = recordingStarted else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+            return
+        }
+        button.imagePosition = .imageLeading
+        button.title = " " + elapsed(since: started)
     }
 
     private func startTicking() {
         stopTicking()
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self, self.menu.numberOfItems > 0 else { return }
+            guard let self else { return }
+            self.updateButtonTitle()
+            guard self.menu.numberOfItems > 0 else { return }
             self.menu.item(at: 0)?.title = self.statusLine()
         }
         RunLoop.main.add(timer, forMode: .common)

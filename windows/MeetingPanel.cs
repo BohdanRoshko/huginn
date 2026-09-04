@@ -95,7 +95,8 @@ internal sealed class MeetingPanel : Form
     private static readonly Color Skeleton = Color.FromArgb(34, 255, 255, 255); // muted placeholder bar on the dark bg
 
     private const int BaseH = 112;
-    private const int MeterCy = 50;   // mic-level meter center (raised — the meter is shorter now)
+    private const int MeterCy = 61;   // mic-level meter center: the band between the header and the list
+    private const int MeterMaxH = 30; // bar height at full level; the band runs 46..76
     private const int JobsDividerY = 80;
     private const int JobsTop = 84;
     private const int RowH = 38;       // original recent-row height (the header, not the rows, was trimmed)
@@ -226,14 +227,13 @@ internal sealed class MeetingPanel : Form
         using (var pen = new Pen(Border)) g.DrawPath(pen, bp);
 
         DrawHeader(g);
-        DrawMeter(g, 16, Width - 16, MeterCy);
-
-        using (var dp = new Pen(Divider)) g.DrawLine(dp, 16, 60, Width - 16, 60);
-        // The footer line is empty except while the trash is armed: the icon-only button needs the hint to
-        // make the two-click contract legible.
+        // The band between the header and the list is the meter. While the trash is armed it shows the confirm
+        // hint instead: the icon-only button needs the hint to make the two-click contract legible.
         if (_recording && _discardArmed)
             TextRenderer.DrawText(g, "Click the trash again to DELETE this recording.", _footFont,
-                new Rectangle(16, 64, Width - 32, 14), Red, TextFormatFlags.NoPrefix | TextFormatFlags.Left);
+                new Rectangle(16, MeterCy - 7, Width - 32, 14), Red, TextFormatFlags.NoPrefix | TextFormatFlags.Left);
+        else
+            DrawMeter(g, 16, Width - 16, MeterCy);
 
         DrawEntries(g);
     }
@@ -308,7 +308,7 @@ internal sealed class MeetingPanel : Form
 
     private void DrawMeter(Graphics g, int x0, int x1, int cy)
     {
-        const int step = 6, barW = 3, maxH = 14;
+        const int step = 6, barW = 3, maxH = MeterMaxH;
         int n = Math.Min(_wave.Length, (x1 - x0) / step);
         for (int i = 0; i < n; i++)
         {

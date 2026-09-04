@@ -71,6 +71,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 self.statusItem.button?.performClick(nil)
             }
+        } else if probe == "notes" {
+            // Photograph the NOTES WINDOW as it looks mid-meeting: mode forced on, a recording running so the
+            // header shows the clock and Stop / Discard, and two lines typed the way a user would.
+            notesMode = .always
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                try? await self.recorder.start()
+                self.recordingStarted = self.recorder.startedAt ?? Date()
+                self.startTicking()
+                self.updateIcon()
+                self.rebuildMenu()
+                self.notes.startRecording(at: self.recordingStarted ?? Date())
+                self.notes.focus()
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self.notes.probeType("decision: ship the smaller version Friday\n")
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                self.notes.probeType("ask Priya about churn")
+                self.saveNotes()
+            }
         }
     }
 

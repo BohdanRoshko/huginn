@@ -286,6 +286,11 @@ final class NotesWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         }
     }
 
+    /// CI only: type as a user would, through the text system, so `textDidChange` stamps and saves.
+    func probeType(_ text: String) {
+        textView.insertText(text, replacementRange: textView.selectedRange())
+    }
+
     // MARK: - actions
 
     @objc private func stopTapped() { onStop?() }

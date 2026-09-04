@@ -247,6 +247,13 @@ jobs:
           sleep 14
           screencapture -x shots/recording.png || echo "screencapture failed (recording)"
           pkill -x Huginn || true
+          sleep 2
+
+          # Third pass: the NOTES WINDOW mid-meeting, with two lines typed into it.
+          HUGINN_UI_PROBE=notes ./Huginn.app/Contents/MacOS/Huginn >/tmp/uiprobe-notes.log 2>&1 &
+          sleep 14
+          screencapture -x shots/notes.png || echo "screencapture failed (notes)"
+          pkill -x Huginn || true
 
           for f in shots/*.png; do
             [ -f "$f" ] && sips -g pixelWidth -g pixelHeight "$f"

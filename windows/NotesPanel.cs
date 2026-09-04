@@ -36,7 +36,6 @@ internal sealed class NotesPanel : Form
     private readonly List<TimeSpan> _lineStamps = new();   // one per logical line of the pad, in order
     private bool _recording;
     private DateTime _startedLocal;
-    private string _readyClock = "";
     private bool _btnHover, _discardHover, _discardArmed;
     private DateTime _discardArmedAt;
     private bool _dragging, _dragMoved;
@@ -92,7 +91,6 @@ internal sealed class NotesPanel : Form
         DoubleBuffered = true;
         BackColor = Bg;
         Size = new Size(W, H);
-        _readyClock = DateTime.Now.ToString("h:mm tt");
 
         _pad = new TextBox
         {
@@ -173,7 +171,6 @@ internal sealed class NotesPanel : Form
     {
         _recording = false;
         _discardArmed = false;
-        _readyClock = DateTime.Now.ToString("h:mm tt");
         _save.Stop();
         _stale = _pad.TextLength > 0;
         _jobStamp = stamp;
@@ -187,7 +184,6 @@ internal sealed class NotesPanel : Form
     {
         _recording = false;
         _discardArmed = false;
-        _readyClock = DateTime.Now.ToString("h:mm tt");
         _save.Stop();
         ClearPad();
         _stale = false;
@@ -335,20 +331,19 @@ internal sealed class NotesPanel : Form
         }
     }
 
-    // The one line under the header: the discard hint while armed, the job's progress after a meeting, a
-    // transient toast, else what the pad is for right now.
+    // The one line under the header: the discard hint while armed, a transient toast, the job's progress after
+    // a meeting, else nothing.
     private (string, Color) HintLine()
     {
         if (_recording && _discardArmed) return ("Click the trash again to DELETE this recording.", Red);
         if (_toast != null) return (_toast, Green);
-        if (_recording) return ("Every line here goes into Odin's summary.", VMuted);
-        if (_jobStamp != null && _status.Length > 0)
+        if (!_recording && _jobStamp != null && _status.Length > 0)
         {
             var col = _status.StartsWith("Failed", StringComparison.Ordinal) ? Red
                 : _status.StartsWith("✓", StringComparison.Ordinal) ? Green : Muted;
             return (_status, col);
         }
-        return ("Type an agenda now; it joins the next recording.", VMuted);
+        return ("", VMuted);
     }
 
     private void DrawHeader(Graphics g)
@@ -360,9 +355,11 @@ internal sealed class NotesPanel : Form
             g.DrawLine(pen, IconTile.X + 7, IconTile.Y + 15, IconTile.X + 15, IconTile.Y + 7);
 
         TextRenderer.DrawText(g, "Notes", _titleFont, new Point(46, 14), TitleCol, TextFormatFlags.NoPrefix);
-        int tw = TextRenderer.MeasureText(g, "Notes", _titleFont).Width;
-        (string sub, Color col) = _recording ? ($"·  REC  {Elapsed()}", Red) : ($"·  {_readyClock}", Muted);
-        TextRenderer.DrawText(g, sub, _subFont, new Point(46 + tw + 6, 16), col, TextFormatFlags.NoPrefix);
+        if (_recording)
+        {
+            int tw = TextRenderer.MeasureText(g, "Notes", _titleFont).Width;
+            TextRenderer.DrawText(g, $"·  REC  {Elapsed()}", _subFont, new Point(46 + tw + 6, 16), Red, TextFormatFlags.NoPrefix);
+        }
 
         if (!ActionsShown) return;
         DrawActionPill(g, Pill, _recording);

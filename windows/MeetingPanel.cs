@@ -38,7 +38,6 @@ internal sealed class MeetingPanel : Form
     private DateTime _discardArmedAt;
     private bool _discardHover;
     private DateTime _startedLocal;
-    private string _readyClock = "";
     private bool _btnHover;
     private bool _dragging;
     private bool _dragMoved;
@@ -113,7 +112,6 @@ internal sealed class MeetingPanel : Form
         Size = new Size(352, BaseH);
 
         _wave = new float[Math.Max(8, (Width - 32) / 6)];
-        _readyClock = DateTime.Now.ToString("h:mm tt");
 
         LoadRecent();
         RecalcHeight();
@@ -139,7 +137,7 @@ internal sealed class MeetingPanel : Form
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; BringToFront(); });
     public void HidePanel() => Ui(() => { CancelRename(); SavePosition(); if (Visible) Hide(); });
 
-    public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; _readyClock = DateTime.Now.ToString("h:mm tt"); Invalidate(); });
+    public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; Invalidate(); });
     public void ShowRecording(DateTime startedLocal) => Ui(() => { _recording = true; _discardArmed = false; _startedLocal = startedLocal; Array.Clear(_wave); _incoming = 0; if (!Visible) { RestorePosition(); Show(); } Invalidate(); });
 
     /// <summary>Add a recording row on top (newest first) for a finished capture; returns its id. Starts as
@@ -231,13 +229,11 @@ internal sealed class MeetingPanel : Form
         DrawMeter(g, 16, Width - 16, MeterCy);
 
         using (var dp = new Pen(Divider)) g.DrawLine(dp, 16, 60, Width - 16, 60);
-        // The footer doubles as the discard confirm hint while the trash is armed (icon-only button → the
-        // hint is what makes the two-click contract legible).
-        (string foot, Color footCol) = _recording && _discardArmed
-            ? ("Click the trash again to DELETE this recording.", Red)
-            : ("Make sure everyone consents to being recorded.", VMuted);
-        TextRenderer.DrawText(g, foot, _footFont,
-            new Rectangle(16, 64, Width - 32, 14), footCol, TextFormatFlags.NoPrefix | TextFormatFlags.Left);
+        // The footer line is empty except while the trash is armed: the icon-only button needs the hint to
+        // make the two-click contract legible.
+        if (_recording && _discardArmed)
+            TextRenderer.DrawText(g, "Click the trash again to DELETE this recording.", _footFont,
+                new Rectangle(16, 64, Width - 32, 14), Red, TextFormatFlags.NoPrefix | TextFormatFlags.Left);
 
         DrawEntries(g);
     }
@@ -250,9 +246,11 @@ internal sealed class MeetingPanel : Form
             g.FillEllipse(dot, IconTile.X + 7, IconTile.Y + 7, 8, 8);
 
         TextRenderer.DrawText(g, "Meeting", _titleFont, new Point(46, 14), TitleCol, TextFormatFlags.NoPrefix);
-        int tw = TextRenderer.MeasureText(g, "Meeting", _titleFont).Width;
-        (string sub, Color col) = _recording ? ($"·  REC  {Elapsed()}", Red) : ($"·  {_readyClock}", Muted);
-        TextRenderer.DrawText(g, sub, _subFont, new Point(46 + tw + 6, 16), col, TextFormatFlags.NoPrefix);
+        if (_recording)
+        {
+            int tw = TextRenderer.MeasureText(g, "Meeting", _titleFont).Width;
+            TextRenderer.DrawText(g, $"·  REC  {Elapsed()}", _subFont, new Point(46 + tw + 6, 16), Red, TextFormatFlags.NoPrefix);
+        }
 
         DrawActionPill(g, Pill, _recording);
         if (_recording) DrawTrash(g, TrashRect, _discardHover, _discardArmed);

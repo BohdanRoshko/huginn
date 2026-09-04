@@ -2,30 +2,34 @@ using System.Text;
 
 namespace Munin;
 
-/// <summary>The notes you type in the recorder panel while a meeting records: one markdown list line per
-/// note, stamped with the offset from the recording start (the transcript carries the same [hh:mm:ss]
-/// stamps, so Odin can quote the transcript around each note). Each line is appended the moment it is
-/// committed, so a crash loses nothing. File: <c>{stamp}_notes.md</c> next to the WAV tracks.</summary>
+/// <summary>The notes typed in <see cref="NotesPanel"/> while a meeting records, as a file: one line per
+/// non-empty pad line, stamped with the offset from the recording start at which the line was begun (the
+/// transcript carries the same [hh:mm:ss] stamps, so Odin can quote the transcript around each note). The
+/// file is rewritten from the pad on every change, so a crash loses nothing. Lives at <c>{stamp}_notes.md</c>
+/// next to the WAV tracks.</summary>
 internal static class MeetingNotes
 {
     public static string Stamp(TimeSpan at) => $"[{(int)at.TotalHours:D2}:{at.Minutes:D2}:{at.Seconds:D2}]";
 
-    public static void Append(string path, DateTime started, TimeSpan at, string text)
+    /// <summary>Overwrites the file with the pad's current lines; no lines = no file.</summary>
+    public static void Save(string path, DateTime started, IReadOnlyList<(TimeSpan at, string text)> lines)
     {
         try
         {
-            bool fresh = !File.Exists(path);
-            using var w = new StreamWriter(path, append: true, new UTF8Encoding(false));
-            if (fresh)
+            if (lines.Count == 0)
             {
-                w.WriteLine($"# Notes typed during the meeting of {started:yyyy-MM-dd HH:mm}");
-                w.WriteLine();
+                if (File.Exists(path)) File.Delete(path);
+                return;
             }
-            w.WriteLine($"- {Stamp(at)} {text}");
+            var sb = new StringBuilder();
+            sb.AppendLine($"# Notes typed during the meeting of {started:yyyy-MM-dd HH:mm}");
+            sb.AppendLine();
+            foreach (var (at, text) in lines) sb.AppendLine($"{Stamp(at)} {text}");
+            File.WriteAllText(path, sb.ToString(), new UTF8Encoding(false));
         }
         catch (Exception ex)
         {
-            MuninLog.Write("meeting note append failed", ex);
+            MuninLog.Write("meeting notes save failed", ex);
         }
     }
 

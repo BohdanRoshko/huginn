@@ -23,11 +23,6 @@ internal enum JobTone { Busy, Good, Warn, Bad, Muted }
 /// (<see cref="CancelRequested"/>). Double-click a row (or right-click it → Rename) to name the meeting; the
 /// transcript file takes that name (<see cref="MeetingProcessor.RenameTranscript"/>) and Odin's title no longer
 /// overwrites it. Drag to move; right-click outside the rows to hide.
-///
-/// While RECORDING a notes block opens under the meter (the panel grows by <see cref="NotesH"/>): type a note,
-/// Enter stamps it with the offset from the recording start and raises <see cref="NoteCommitted"/> (the app
-/// appends it to the meeting's notes file); the last few lines stay visible above the box. Odin treats every
-/// line as a must-include and expands it from the transcript around that time (the Granola idea).
 /// </summary>
 internal sealed class MeetingPanel : Form
 {
@@ -37,9 +32,6 @@ internal sealed class MeetingPanel : Form
     /// <summary>Raised when the user confirms the two-click discard (trash) while recording: stop AND
     /// delete the audio — no transcription, no filing.</summary>
     public event Action? DiscardRequested;
-    /// <summary>Raised when the user commits a note line while recording: the offset from the recording
-    /// start and the text.</summary>
-    public event Action<TimeSpan, string>? NoteCommitted;
 
     private bool _recording;
     private bool _discardArmed;
@@ -55,8 +47,6 @@ internal sealed class MeetingPanel : Form
     private TextBox? _editor;              // inline rename box over a row's name line
     private int _editingId = -1;
     private ContextMenuStrip? _rowMenu;
-    private TextBox _notesBox = null!;        // the live note input (recording only)
-    private readonly List<(TimeSpan at, string text)> _noteLines = new();
 
     private sealed class Entry
     {
@@ -107,14 +97,8 @@ internal sealed class MeetingPanel : Form
 
     private const int BaseH = 112;
     private const int MeterCy = 50;   // mic-level meter center (raised — the meter is shorter now)
-    // The notes block sits between the footer and the recordings list, RECORDING ONLY.
-    private const int NotesTop = 82;
-    private const int NotesLines = 4;         // committed lines kept visible above the input
-    private const int NoteLineH = 15;
-    private const int NotesInputH = 22;
-    private const int NotesH = NotesLines * NoteLineH + 4 + NotesInputH + 6;
-    private int JobsDividerY => _recording ? 80 + NotesH : 80;
-    private int JobsTop => JobsDividerY + 4;
+    private const int JobsDividerY = 80;
+    private const int JobsTop = 84;
     private const int RowH = 38;       // original recent-row height (the header, not the rows, was trimmed)
     private const int BottomPad = 8;
 
@@ -138,20 +122,6 @@ internal sealed class MeetingPanel : Form
         _tick.Tick += OnTick;
         _tick.Start();
 
-        _notesBox = new TextBox
-        {
-            Multiline = true,                 // lets the box be taller than one font line; Enter is handled below
-            WordWrap = false,
-            BorderStyle = BorderStyle.None,
-            BackColor = Color.FromArgb(44, 44, 47),
-            ForeColor = TitleCol,
-            Font = _subFont,
-            PlaceholderText = "Type a note, Enter to stamp it",
-            Visible = false,
-        };
-        _notesBox.KeyDown += OnNoteKeyDown;
-        Controls.Add(_notesBox);
-
         _ = Handle;
         Visible = false;
     }
@@ -169,49 +139,8 @@ internal sealed class MeetingPanel : Form
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; BringToFront(); });
     public void HidePanel() => Ui(() => { CancelRename(); SavePosition(); if (Visible) Hide(); });
 
-    public void SetIdle() => Ui(() =>
-    {
-        _recording = false;
-        _discardArmed = false;
-        _readyClock = DateTime.Now.ToString("h:mm tt");
-        _notesBox.Visible = false;
-        _noteLines.Clear();
-        CancelRename();
-        RecalcHeight();
-    });
-
-    public void ShowRecording(DateTime startedLocal) => Ui(() =>
-    {
-        _recording = true;
-        _discardArmed = false;
-        _startedLocal = startedLocal;
-        Array.Clear(_wave);
-        _incoming = 0;
-        CancelRename();
-        _noteLines.Clear();
-        _notesBox.Text = "";
-        _notesBox.SetBounds(16, NotesTop + NotesLines * NoteLineH + 4, Width - 32, NotesInputH);
-        _notesBox.Visible = true;
-        RecalcHeight();
-        if (!Visible) { RestorePosition(); Show(); }
-        // Take the keyboard only when the panel is already the active window (Record clicked here); a start from
-        // the tray menu must not pull focus away from the call.
-        if (ActiveForm == this) _notesBox.Focus();
-    });
-
-    private void OnNoteKeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; _notesBox.Text = ""; return; }
-        if (e.KeyCode != Keys.Enter) return;
-        e.SuppressKeyPress = true;
-        var text = _notesBox.Text.Trim();
-        _notesBox.Text = "";
-        if (text.Length == 0 || !_recording) return;
-        var at = DateTime.Now - _startedLocal;
-        _noteLines.Add((at, text));
-        Invalidate();
-        NoteCommitted?.Invoke(at, text);
-    }
+    public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; _readyClock = DateTime.Now.ToString("h:mm tt"); Invalidate(); });
+    public void ShowRecording(DateTime startedLocal) => Ui(() => { _recording = true; _discardArmed = false; _startedLocal = startedLocal; Array.Clear(_wave); _incoming = 0; if (!Visible) { RestorePosition(); Show(); } Invalidate(); });
 
     /// <summary>Add a recording row on top (newest first) for a finished capture; returns its id. Starts as
     /// a cancelable "Transcribing…". Older rows beyond <see cref="DisplayMax"/> drop off the list.</summary>
@@ -310,32 +239,7 @@ internal sealed class MeetingPanel : Form
         TextRenderer.DrawText(g, foot, _footFont,
             new Rectangle(16, 64, Width - 32, 14), footCol, TextFormatFlags.NoPrefix | TextFormatFlags.Left);
 
-        if (_recording) DrawNotes(g);
         DrawEntries(g);
-    }
-
-    // The live notes block: the last NotesLines committed lines, newest at the bottom, right above the input.
-    private void DrawNotes(Graphics g)
-    {
-        if (_noteLines.Count == 0)
-        {
-            TextRenderer.DrawText(g, "Notes you type here steer Odin's summary.", _rowMetaFont,
-                new Rectangle(16, NotesTop, Width - 32, NoteLineH), VMuted, TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.NoPadding);
-            return;
-        }
-        int shown = Math.Min(NotesLines, _noteLines.Count);
-        int first = _noteLines.Count - shown;
-        for (int k = 0; k < shown; k++)
-        {
-            var (at, text) = _noteLines[first + k];
-            int y = NotesTop + (NotesLines - shown + k) * NoteLineH;
-            string stamp = MeetingNotes.Stamp(at);
-            int sw = TextRenderer.MeasureText(g, stamp, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width;
-            TextRenderer.DrawText(g, stamp, _rowMetaFont, new Rectangle(16, y, sw + 2, NoteLineH), Muted,
-                TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.NoPadding);
-            TextRenderer.DrawText(g, text, _rowMetaFont, new Rectangle(16 + sw + 6, y, Width - 32 - sw - 6, NoteLineH), RowName,
-                TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-        }
     }
 
     private void DrawHeader(Graphics g)
@@ -500,8 +404,8 @@ internal sealed class MeetingPanel : Form
 
     private void RecalcHeight()
     {
-        // Fixed size while idle: the header + DisplayMax row slots (empty slots render as skeleton placeholders, see
-        // DrawSkeletonRow, so the count of meetings never changes the height). Recording adds the notes block.
+        // FIXED size, always: the header + DisplayMax row slots. Slots without a recording render as skeleton
+        // placeholders (see DrawSkeletonRow), so the window height never changes with how many meetings exist.
         int h = JobsTop + DisplayMax * RowH + BottomPad;
         if (Height != h) { Height = h; ApplyRegion(); }
         Invalidate();

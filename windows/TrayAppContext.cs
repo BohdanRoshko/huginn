@@ -23,6 +23,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly MeetingRecorder _meeting;
     private readonly MeetingOverlay? _meetingOverlay;
     private readonly MeetingPanel _panel;
+    private readonly NotesPanel _notes;
     private ToolStripMenuItem _meetingItem = null!;
     private ToolStripMenuItem _discardItem = null!;
     private ToolStripMenuItem _sendMeetingsItem = null!;
@@ -80,8 +81,19 @@ internal sealed class TrayAppContext : ApplicationContext
         _panel.RecordToggleRequested += ToggleMeeting;
         _panel.CancelRequested += CancelJob;
         _panel.DiscardRequested += () => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); };
-        _panel.NoteCommitted += OnNoteCommitted;
         _meeting.LevelChanged += _panel.SetLevel;
+        // The notepad pairs with the recorder: same controls, follows its show/hide, sits beside it.
+        _notes = new NotesPanel();
+        _notes.RecordToggleRequested += ToggleMeeting;
+        _notes.DiscardRequested += () => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); };
+        _notes.NotesChanged += SaveNotes;
+        _notes.HideRequested += () => _panel.HidePanel();
+        _panel.LocationChanged += (_, _) => _notes.RecorderChanged(_panel.Bounds, _panel.Visible);
+        _panel.VisibleChanged += (_, _) =>
+        {
+            _notes.RecorderChanged(_panel.Bounds, _panel.Visible);
+            if (_panel.Visible) _notes.ShowPanel(); else _notes.HidePanel();
+        };
         _sendMeetings = Settings.SendMeetingsToOdin;
         _panelVisible = Settings.MeetingPanelVisible;
         _cleanupEnabled = Settings.CleanupEnabled;
@@ -148,6 +160,7 @@ internal sealed class TrayAppContext : ApplicationContext
         try { File.Delete(Paths.QuitFlagPath()); } catch { /* best effort */ }
         if (_meeting.IsRecording)
         {
+            SaveNotes();
             _meeting.Stop();
             await _meeting.FinalizeAsync(); // flush the WAV writers — the recording survives on disk unprocessed
         }
@@ -310,12 +323,18 @@ internal sealed class TrayAppContext : ApplicationContext
         SetStatus("● Recording meeting…");
         OnUi(() => _meetingOverlay?.ShowRecording(_meeting.StartedLocal));
         _panel.ShowRecording(_meeting.StartedLocal);
+        _notes.ShowRecording(_meeting.StartedLocal);
+        SaveNotes(); // an agenda typed before Record joins the file at [00:00:00]
+        // Hand the keyboard to the pad only when Record was clicked in one of Munin's own windows; a start from
+        // the tray menu must not pull focus away from the call.
+        if (Form.ActiveForm == _panel || Form.ActiveForm == _notes) _notes.FocusPad();
     }
 
     // Shared teardown for BOTH stop paths: capture flushed + UI back to ready IMMEDIATELY — the next
     // meeting can start while (if kept) this one processes in the background.
     private async Task<MeetingCapture?> EndMeetingAsync()
     {
+        SaveNotes(); // the last edits, before the recorder stops accepting them
         _meeting.Stop();
         var cap = await _meeting.FinalizeAsync();   // fast: flush the WAV writers, free the recorder
 
@@ -327,6 +346,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _discardItem.Enabled = false;
         OnUi(() => _meetingOverlay?.HideOverlay());
         _panel.SetIdle();
+        _notes.SetIdle();
         return cap;
     }
 
@@ -352,12 +372,12 @@ internal sealed class TrayAppContext : ApplicationContext
         ShowInfo("Munin — recording discarded", "The meeting audio was deleted; nothing was transcribed or filed.");
     }
 
-    // A note line committed in the panel while recording: stamp it with the offset from the recording start and
-    // append it to the meeting's notes file at once (a crash keeps everything typed so far).
-    private void OnNoteCommitted(TimeSpan at, string text)
+    // The pad changed (debounced) or the recording is ending: rewrite the meeting's notes file from the pad, so a
+    // crash keeps everything typed so far and the finished job posts exactly what was on screen.
+    private void SaveNotes()
     {
         if (!_meeting.IsRecording) return;
-        MeetingNotes.Append(_meeting.NotesPath, _meeting.StartedLocal, at, text);
+        MeetingNotes.Save(_meeting.NotesPath, _meeting.StartedLocal, _notes.Snapshot());
     }
 
     // User clicked ✕ on an in-flight row: cancel that job's transcription / Odin filing. The transcript and
@@ -703,6 +723,7 @@ internal sealed class TrayAppContext : ApplicationContext
             _overlay?.Dispose();
             _meetingOverlay?.Dispose();
             _panel.Dispose();
+            _notes.Dispose();
             _marshal.Dispose();
         }
         base.Dispose(disposing);

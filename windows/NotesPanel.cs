@@ -58,7 +58,7 @@ internal sealed class NotesPanel : Form
     private static readonly Color RedHover = Color.FromArgb(236, 92, 96);
 
     // Exactly the recorder's idle size (its JobsTop + DisplayMax rows + BottomPad).
-    private const int W = 372, H = 396;
+    private const int W = 352, H = 396;
     private const int HeaderDivY = 48;
     private const int HintY = 54;
     private const int PadTop = 72;

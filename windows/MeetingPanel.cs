@@ -110,7 +110,7 @@ internal sealed class MeetingPanel : Form
         StartPosition = FormStartPosition.Manual;
         DoubleBuffered = true;
         BackColor = Bg;
-        Size = new Size(372, BaseH);
+        Size = new Size(352, BaseH);
 
         _wave = new float[Math.Max(8, (Width - 32) / 6)];
         _readyClock = DateTime.Now.ToString("h:mm tt");

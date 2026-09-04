@@ -376,6 +376,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             var r = await MeetingProcessor.TranscribeAsync(cap, _transcriber, cts.Token);
             MuninLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
+            _panel.SetJobTranscript(jobId, r.TranscriptPath);
             if (_sendMeetings)
             {
                 _panel.SetJobStatus(jobId, "Filing to Odin…", JobTone.Busy, cancelable: true);

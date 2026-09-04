@@ -20,7 +20,9 @@ internal enum JobTone { Busy, Good, Warn, Bad, Muted }
 /// processing (transcribe/file) if it isn't worth keeping. Starting a new meeting pushes a new row on top
 /// and drops the oldest off the list. So you can start the next meeting while a previous one transcribes.
 /// Click the pill = start/stop (<see cref="RecordToggleRequested"/>); click a row's ✕ = cancel
-/// (<see cref="CancelRequested"/>). Drag to move; right-click to hide.
+/// (<see cref="CancelRequested"/>). Double-click a row (or right-click it → Rename) to name the meeting; the
+/// transcript file takes that name (<see cref="MeetingProcessor.RenameTranscript"/>) and Odin's title no longer
+/// overwrites it. Drag to move; right-click outside the rows to hide.
 /// </summary>
 internal sealed class MeetingPanel : Form
 {
@@ -42,6 +44,9 @@ internal sealed class MeetingPanel : Form
     private bool _dragMoved;
     private Point _dragOrigin;
     private int _hoverCancelId = -1;
+    private TextBox? _editor;              // inline rename box over a row's name line
+    private int _editingId = -1;
+    private ContextMenuStrip? _rowMenu;
 
     private sealed class Entry
     {
@@ -52,6 +57,8 @@ internal sealed class MeetingPanel : Form
         public string Status = "Transcribing…";
         public JobTone Tone = JobTone.Busy;
         public bool Cancelable = true;        // true only while transcribing / filing
+        public string? Transcript;            // the transcript file, once written (null while transcribing)
+        public bool Renamed;                  // the user named it; Odin's title must not overwrite
     }
 
     private const int DisplayMax = 8;
@@ -130,7 +137,7 @@ internal sealed class MeetingPanel : Form
 
     // ---- public API ----
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; BringToFront(); });
-    public void HidePanel() => Ui(() => { SavePosition(); if (Visible) Hide(); });
+    public void HidePanel() => Ui(() => { CancelRename(); SavePosition(); if (Visible) Hide(); });
 
     public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; _readyClock = DateTime.Now.ToString("h:mm tt"); Invalidate(); });
     public void ShowRecording(DateTime startedLocal) => Ui(() => { _recording = true; _discardArmed = false; _startedLocal = startedLocal; Array.Clear(_wave); _incoming = 0; if (!Visible) { RestorePosition(); Show(); } Invalidate(); });
@@ -159,14 +166,24 @@ internal sealed class MeetingPanel : Form
         Invalidate();
     });
 
-    /// <summary>Name the recording (the Odin note title) once it's been filed.</summary>
+    /// <summary>Name the recording (the Odin note title) once it's been filed. A name the user typed wins.</summary>
     public void SetJobTitle(int id, string? title) => Ui(() =>
     {
         var j = _entries.Find(x => x.Id == id);
-        if (j == null || string.IsNullOrWhiteSpace(title)) return;
+        if (j == null || j.Renamed || string.IsNullOrWhiteSpace(title)) return;
         j.Title = title.Trim();
         SaveRecent();
         Invalidate();
+    });
+
+    /// <summary>Record where the transcript landed. If the user renamed the row while it was still in flight,
+    /// the file takes that name now.</summary>
+    public void SetJobTranscript(int id, string path) => Ui(() =>
+    {
+        var j = _entries.Find(x => x.Id == id);
+        if (j == null) return;
+        j.Transcript = j.Renamed ? MeetingProcessor.RenameTranscript(path, j.Stamp, j.Title) : path;
+        SaveRecent();
     });
 
     /// <summary>Push a live input level (0..1) into the meter. Thread-safe (single float write).</summary>
@@ -409,7 +426,13 @@ internal sealed class MeetingPanel : Form
     // ---- mouse ----
     protected override void OnMouseDown(MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Right) { HidePanel(); return; }
+        if (e.Button == MouseButtons.Right)
+        {
+            int row = RowAt(e.Location);
+            if (row >= 0) ShowRowMenu(_entries[row], e.Location);
+            else HidePanel();
+            return;
+        }
         if (e.Button != MouseButtons.Left) return;
         if (Pill.Contains(e.Location)) { RecordToggleRequested?.Invoke(); return; }
         if (_recording && TrashRect.Contains(e.Location))
@@ -456,6 +479,16 @@ internal sealed class MeetingPanel : Form
         if (_dragging) { _dragging = false; if (_dragMoved) SavePosition(); }
     }
 
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        if (e.Button != MouseButtons.Left) return;
+        int row = RowAt(e.Location);
+        if (row < 0 || CancelRect(row).Contains(e.Location)) return;
+        _dragging = false; // the second mouse-down armed a drag; this is a rename, not a move
+        BeginRename(_entries[row], row);
+    }
+
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
@@ -467,8 +500,104 @@ internal sealed class MeetingPanel : Form
         if (changed) Invalidate();
     }
 
+    // ---- rename (double-click a row, or right-click → Rename) ----
+    private int RowAt(Point p)
+    {
+        if (p.X < 16 || p.X > Width - 16 || p.Y < JobsTop) return -1;
+        int i = (p.Y - JobsTop) / RowH;
+        return i < _entries.Count ? i : -1;
+    }
+
+    private static string ResolveTranscript(Entry e) => e.Transcript ?? MeetingProcessor.TranscriptPathFor(e.Stamp, null);
+
+    private void ShowRowMenu(Entry entry, Point at)
+    {
+        _rowMenu?.Dispose();
+        _rowMenu = new ContextMenuStrip();
+        int row = _entries.IndexOf(entry);
+        var path = ResolveTranscript(entry);
+        bool hasFile = File.Exists(path);
+        _rowMenu.Items.Add("Rename", null, (_, _) => BeginRename(entry, row));
+        _rowMenu.Items.Add(new ToolStripMenuItem("Open transcript", null, (_, _) => OpenPath(path)) { Enabled = hasFile });
+        _rowMenu.Items.Add(new ToolStripMenuItem("Show in folder", null, (_, _) => RevealPath(path)) { Enabled = hasFile });
+        _rowMenu.Items.Add(new ToolStripSeparator());
+        _rowMenu.Items.Add("Hide panel", null, (_, _) => HidePanel());
+        _rowMenu.Show(this, at);
+    }
+
+    private static void OpenPath(string path)
+    {
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); }
+        catch { /* non-fatal */ }
+    }
+
+    private static void RevealPath(string path)
+    {
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true }); }
+        catch { /* non-fatal */ }
+    }
+
+    private void BeginRename(Entry entry, int row)
+    {
+        CancelRename();
+        if (row < 0) return;
+        int top = JobsTop + row * RowH;
+        int nameW = Width - 34 - (entry.Cancelable ? 40 : 16);
+        _editingId = entry.Id;
+        _editor = new TextBox
+        {
+            BorderStyle = BorderStyle.None,
+            BackColor = Color.FromArgb(44, 44, 47),
+            ForeColor = TitleCol,
+            Font = _rowNameFont,
+            Text = entry.Title ?? "",
+            Location = new Point(34, top + 3),
+            Width = nameW,
+        };
+        _editor.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; CommitRename(); }
+            else if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; CancelRename(); }
+        };
+        _editor.LostFocus += (_, _) => CommitRename();
+        Controls.Add(_editor);
+        _editor.BringToFront();
+        _editor.SelectAll();
+        _editor.Focus();
+    }
+
+    // Enter / focus loss commits. RemoveEditor nulls _editor FIRST, so the LostFocus this triggers is a no-op.
+    private void CommitRename()
+    {
+        var box = _editor;
+        if (box == null) return;
+        var text = box.Text.Trim();
+        var entry = _entries.Find(x => x.Id == _editingId);
+        RemoveEditor();
+        if (entry == null || text.Length == 0 || text == entry.Title) return;
+        entry.Title = text;
+        entry.Renamed = true;
+        var current = ResolveTranscript(entry);
+        if (File.Exists(current)) entry.Transcript = MeetingProcessor.RenameTranscript(current, entry.Stamp, text);
+        SaveRecent();
+        Invalidate();
+    }
+
+    private void CancelRename() => RemoveEditor();
+
+    private void RemoveEditor()
+    {
+        var box = _editor;
+        _editor = null;
+        _editingId = -1;
+        if (box == null) return;
+        Controls.Remove(box);
+        box.Dispose();
+    }
+
     // ---- recent-recordings persistence (so the last 5 survive a restart) ----
-    private sealed record EntryDto(string Stamp, string Started, string? Title, string Status, int Tone);
+    private sealed record EntryDto(string Stamp, string Started, string? Title, string Status, int Tone,
+        string? Transcript = null, bool Renamed = false);
 
     private static string RecentFile => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", "Meetings", "recent.json");
@@ -480,7 +609,7 @@ internal sealed class MeetingPanel : Form
         {
             // Snapshot on the UI thread (reads _entries); only the file write moves off-thread.
             var dto = _entries.Take(DisplayMax).Select(j =>
-                new EntryDto(j.Stamp, j.Started.ToString("o"), j.Title, j.Status, (int)j.Tone)).ToList();
+                new EntryDto(j.Stamp, j.Started.ToString("o"), j.Title, j.Status, (int)j.Tone, j.Transcript, j.Renamed)).ToList();
             json = JsonSerializer.Serialize(dto);
         }
         catch { return; }
@@ -535,6 +664,8 @@ internal sealed class MeetingPanel : Form
                         Status = inFlight ? "Interrupted" : (status.Length == 0 ? "Saved" : status),
                         Tone = tone,
                         Cancelable = false,
+                        Transcript = d.Transcript,
+                        Renamed = d.Renamed,
                     });
                 }
                 catch { /* skip one bad row, keep the rest */ }
@@ -620,6 +751,8 @@ internal sealed class MeetingPanel : Form
             _footFont.Dispose();
             _rowNameFont.Dispose();
             _rowMetaFont.Dispose();
+            _editor?.Dispose();
+            _rowMenu?.Dispose();
         }
         base.Dispose(disposing);
     }

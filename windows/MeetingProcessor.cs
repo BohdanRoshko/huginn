@@ -28,10 +28,51 @@ internal static class MeetingProcessor
         }
         labeled.Sort((a, b) => a.start.CompareTo(b.start));
 
-        var transcriptPath = Path.Combine(Paths.MeetingsDir(), $"{cap.Stamp}_transcript.txt");
+        var transcriptPath = TranscriptPathFor(cap.Stamp, null);
         var text = Format(labeled, cap.StartedLocal);
         await File.WriteAllTextAsync(transcriptPath, text, new UTF8Encoding(false), ct).ConfigureAwait(false);
         return new MeetingResult(transcriptPath, text, labeled.Count, cap.MicPath, cap.LoopPath);
+    }
+
+    /// <summary>Where a transcript lives: <c>{stamp}_{name}.txt</c> once the user has named the meeting, else the
+    /// default <c>{stamp}_transcript.txt</c>. The stamp prefix stays so the file sorts next to its WAV tracks.</summary>
+    public static string TranscriptPathFor(string stamp, string? title)
+    {
+        var safe = SafeFileName(title);
+        return Path.Combine(Paths.MeetingsDir(), safe.Length == 0 ? $"{stamp}_transcript.txt" : $"{stamp}_{safe}.txt");
+    }
+
+    /// <summary>Moves an existing transcript to the name <see cref="TranscriptPathFor"/> gives it and returns the
+    /// path the file has afterwards (unchanged when the file is missing or the move fails).</summary>
+    public static string RenameTranscript(string currentPath, string stamp, string? title)
+    {
+        try
+        {
+            if (!File.Exists(currentPath)) return currentPath;
+            var target = TranscriptPathFor(stamp, title);
+            if (string.Equals(target, currentPath, StringComparison.OrdinalIgnoreCase)) return currentPath;
+            if (File.Exists(target))
+                target = Path.Combine(Path.GetDirectoryName(target)!, $"{Path.GetFileNameWithoutExtension(target)} (2).txt");
+            File.Move(currentPath, target);
+            MuninLog.Write($"meeting {stamp}: transcript renamed -> {Path.GetFileName(target)}");
+            return target;
+        }
+        catch (Exception ex)
+        {
+            MuninLog.Write($"meeting {stamp}: transcript rename failed", ex);
+            return currentPath;
+        }
+    }
+
+    private static string SafeFileName(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return "";
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder();
+        foreach (var c in title.Trim())
+            sb.Append(Array.IndexOf(invalid, c) >= 0 ? ' ' : c);
+        var s = System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ").Trim(' ', '.');
+        return s.Length <= 80 ? s : s[..80].TrimEnd(' ', '.');
     }
 
     private static string Format(List<(TimeSpan start, string speaker, string text)> segs, DateTime started)

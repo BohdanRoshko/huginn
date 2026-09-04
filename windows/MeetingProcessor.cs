@@ -4,8 +4,18 @@ using NAudio.Wave.SampleProviders;
 
 namespace Munin;
 
-/// <summary>The artifacts a finished meeting recording produces.</summary>
-internal sealed record MeetingResult(string TranscriptPath, string Text, int SegmentCount, string MicWavPath, string LoopWavPath);
+/// <summary>The artifacts a finished meeting recording produces. <paramref name="RawTranscriptPath"/> is set only
+/// when the echo gates removed something: the untouched interleave, kept for a second look.</summary>
+internal sealed record MeetingResult(string TranscriptPath, string Text, int SegmentCount, string MicWavPath, string LoopWavPath,
+    string? RawTranscriptPath, EchoReport Echo);
+
+/// <summary>What the three echo gates did to the "Me" lines (see <see cref="EchoGate"/>).</summary>
+internal sealed record EchoReport(int MeLines, int RemovedSilent, int RemovedAcoustic, int RemovedText, int LagMs, double LagConfidence)
+{
+    public int Removed => RemovedSilent + RemovedAcoustic + RemovedText;
+    public override string ToString() =>
+        $"lag {LagMs:+#;-#;0} ms (confidence {LagConfidence:F2}); of {MeLines} Me lines removed {RemovedSilent} silent, {RemovedAcoustic} echo, {RemovedText} by text";
+}
 
 /// <summary>
 /// Batch-transcribes a finished <see cref="MeetingCapture"/> (off the recording hot path, so it can run
@@ -18,20 +28,56 @@ internal static class MeetingProcessor
 {
     public static async Task<MeetingResult> TranscribeAsync(MeetingCapture cap, Transcriber transcriber, CancellationToken ct = default)
     {
-        var labeled = new List<(TimeSpan start, string speaker, string text)>();
-        foreach (var (path, speaker) in new[] { (cap.MicPath, "Me"), (cap.LoopPath, "Them") })
+        var me = new List<TranscriptSegment>();
+        var them = new List<TranscriptSegment>();
+        float[]? micEnv = null, loopEnv = null;
+        if (HasAudio(cap.MicPath))
         {
-            if (!HasAudio(path)) continue;
-            using var wav = OpenAsWhisperWav(path);
-            foreach (var seg in await transcriber.TranscribeSegmentsAsync(wav, ct).ConfigureAwait(false))
-                labeled.Add((seg.Start, speaker, seg.Text));
+            using var wav = OpenAsWhisperWav(cap.MicPath);
+            micEnv = EchoGate.Envelope(wav);
+            wav.Position = 0;
+            me.AddRange(await transcriber.TranscribeSegmentsAsync(wav, ct).ConfigureAwait(false));
         }
-        labeled.Sort((a, b) => a.start.CompareTo(b.start));
+        if (HasAudio(cap.LoopPath))
+        {
+            using var wav = OpenAsWhisperWav(cap.LoopPath);
+            loopEnv = EchoGate.Envelope(wav);
+            wav.Position = 0;
+            them.AddRange(await transcriber.TranscribeSegmentsAsync(wav, ct).ConfigureAwait(false));
+        }
+
+        // On speakers most "Me" lines are the far side again, and Whisper invents lines on silence. Two acoustic
+        // gates, then the text pass; each keeps what it cannot prove. The untouched interleave is kept as .raw.
+        var verdict = EchoGate.Judge(me, micEnv, loopEnv);
+        var all = new List<(TimeSpan start, string speaker, string text)>();
+        var kept = new List<(TimeSpan start, string speaker, string text)>();
+        for (int i = 0; i < me.Count; i++)
+        {
+            all.Add((me[i].Start, "Me", me[i].Text));
+            if (!verdict.Drop[i]) kept.Add((me[i].Start, "Me", me[i].Text));
+        }
+        foreach (var s in them)
+        {
+            all.Add((s.Start, "Them", s.Text));
+            kept.Add((s.Start, "Them", s.Text));
+        }
+        all.Sort((a, b) => a.start.CompareTo(b.start));
+        kept.Sort((a, b) => a.start.CompareTo(b.start));
+
+        var rawText = Format(all, cap.StartedLocal);
+        var reconciled = TranscriptReconciler.DeEcho(Format(kept, cap.StartedLocal));
+        var text = reconciled.Text;
+        var echo = new EchoReport(me.Count, verdict.Silent, verdict.Echo, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagConfidence);
 
         var transcriptPath = TranscriptPathFor(cap.Stamp, null);
-        var text = Format(labeled, cap.StartedLocal);
         await File.WriteAllTextAsync(transcriptPath, text, new UTF8Encoding(false), ct).ConfigureAwait(false);
-        return new MeetingResult(transcriptPath, text, labeled.Count, cap.MicPath, cap.LoopPath);
+        string? rawPath = null;
+        if (echo.Removed > 0)
+        {
+            rawPath = Path.Combine(Paths.MeetingsDir(), $"{cap.Stamp}_transcript.raw.txt");
+            await File.WriteAllTextAsync(rawPath, rawText, new UTF8Encoding(false), ct).ConfigureAwait(false);
+        }
+        return new MeetingResult(transcriptPath, text, kept.Count - reconciled.RemovedEchoes, cap.MicPath, cap.LoopPath, rawPath, echo);
     }
 
     /// <summary>Where a transcript lives: <c>{stamp}_{name}.txt</c> once the user has named the meeting, else the

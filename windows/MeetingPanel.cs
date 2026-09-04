@@ -500,6 +500,15 @@ internal sealed class MeetingPanel : Form
         if (changed) Invalidate();
     }
 
+    /// <summary>The CURRENT transcript path of a recording (it moves on rename), or null when none exists yet.</summary>
+    public string? TranscriptPathFor(string stamp)
+    {
+        var e = _entries.Find(x => x.Stamp == stamp);
+        if (e == null) return null;
+        var path = ResolveTranscript(e);
+        return File.Exists(path) ? path : null;
+    }
+
     // ---- rename (double-click a row, or right-click → Rename) ----
     private int RowAt(Point p)
     {

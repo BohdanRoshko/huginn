@@ -5,15 +5,19 @@ using System.Windows.Forms;
 namespace Munin;
 
 /// <summary>
-/// The notepad that pairs with <see cref="MeetingPanel"/>: the same size and skin, placed beside it, and it
-/// follows the recorder's show/hide. The header mirrors the recorder's — "Notes", the running time, and the
-/// same Record / Stop + trash controls — but those controls hide while the recorder is visible on the same
-/// screen, so each screen has one set of buttons. The body is a plain notepad (the Granola idea: what you
-/// write during the call is what the summary must contain). Behind the scenes every line is stamped with the
-/// offset from the recording start at the moment the line was begun — the transcript's own [hh:mm:ss] clock —
-/// and <see cref="Snapshot"/> hands the stamped lines to the app, which keeps {stamp}_notes.md current and
-/// posts it with the transcript. Lines typed before Record carry [00:00:00] and join the next recording; Stop
-/// clears the pad (the file already holds everything).
+/// The notepad that pairs with <see cref="MeetingPanel"/>: the same size and skin, placed beside it. The
+/// header mirrors the recorder's — "Notes", the running time, and the same Record / Stop + trash controls —
+/// but those controls hide while the recorder is visible on the same screen, so each screen has one set of
+/// buttons. The body is a plain notepad (the Granola idea: what you write during the call is what the
+/// summary must contain). Behind the scenes every line is stamped with the offset from the recording start
+/// at the moment the line was begun — the transcript's own [hh:mm:ss] clock — and <see cref="Snapshot"/>
+/// hands the stamped lines to the app, which keeps {stamp}_notes.md current and posts it with the transcript.
+///
+/// Lifecycle (Settings.NotesMode decides whether the window is always shown, shown when a recording starts,
+/// or never): Record clears the pad only when it still holds the previous meeting's untouched notes — lines
+/// typed since (an agenda) carry [00:00:00] and join the recording. After Stop the pad keeps the notes while
+/// the status line follows the job (Transcribing… → Filing to Odin… → the result); once the transcript
+/// exists, <b>Open transcript</b> / <b>Copy path</b> appear in the footer until the next recording starts.
 /// </summary>
 internal sealed class NotesPanel : Form
 {
@@ -22,8 +26,11 @@ internal sealed class NotesPanel : Form
     public event Action? DiscardRequested;
     /// <summary>The pad changed (debounced); the app persists <see cref="Snapshot"/>.</summary>
     public event Action? NotesChanged;
-    /// <summary>Right-click on the header: hide the pair.</summary>
+    /// <summary>Right-click on the header: hide this window (and the recorder, when they are paired).</summary>
     public event Action? HideRequested;
+
+    /// <summary>Stamp → the transcript's CURRENT path (it moves on rename), or null when there is none yet.</summary>
+    public Func<string, string?>? TranscriptResolver { get; set; }
 
     private readonly TextBox _pad;
     private readonly List<TimeSpan> _lineStamps = new();   // one per logical line of the pad, in order
@@ -38,6 +45,13 @@ internal sealed class NotesPanel : Form
     private bool _recorderVisible;
     private bool _hideActions;
     private bool _suppressTextChanged;
+    private bool _stale;                  // the pad still shows the previous meeting's notes, untouched
+    private string? _jobStamp;            // the finished meeting the status line + footer refer to
+    private string _status = "";
+    private bool _hasTranscript;
+    private int _hoverFooter = -1;        // 0 = Open transcript, 1 = Copy path
+    private string? _toast;
+    private DateTime _toastAt;
 
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 500 };
     private readonly System.Windows.Forms.Timer _save = new() { Interval = 400 };
@@ -46,6 +60,7 @@ internal sealed class NotesPanel : Form
     private readonly Font _pillFont = new("Segoe UI Semibold", 9.5f);
     private readonly Font _hintFont = new("Segoe UI", 8f);
     private readonly Font _padFont = new("Segoe UI", 10f);
+    private readonly Font _footFont = new("Segoe UI Semibold", 8.5f);
 
     // Same palette as MeetingPanel, so the two windows read as one pair.
     private static readonly Color Bg = Color.FromArgb(30, 30, 32);
@@ -56,6 +71,7 @@ internal sealed class NotesPanel : Form
     private static readonly Color VMuted = Color.FromArgb(104, 104, 108);
     private static readonly Color Red = Color.FromArgb(224, 72, 77);
     private static readonly Color RedHover = Color.FromArgb(236, 92, 96);
+    private static readonly Color Green = Color.FromArgb(122, 196, 143);
 
     // Exactly the recorder's idle size (its JobsTop + DisplayMax rows + BottomPad).
     private const int W = 352, H = 396;
@@ -63,6 +79,9 @@ internal sealed class NotesPanel : Form
     private const int HintY = 54;
     private const int PadTop = 72;
     private const int PadBottomPad = 14;
+    private const int FooterH = 26;
+    private int FooterY => H - PadBottomPad - FooterH;
+    private int PadBottom => _hasTranscript ? FooterY - 8 : H - PadBottomPad;
 
     public NotesPanel()
     {
@@ -85,8 +104,8 @@ internal sealed class NotesPanel : Form
             ForeColor = TitleCol,
             Font = _padFont,
             AcceptsTab = false,
-            Bounds = new Rectangle(16, PadTop, W - 32, H - PadTop - PadBottomPad),
         };
+        LayoutPad();
         _pad.TextChanged += OnPadTextChanged;
         Controls.Add(_pad);
 
@@ -108,7 +127,11 @@ internal sealed class NotesPanel : Form
         ? new Rectangle(Width - 14 - 80, 11, 80, 28)
         : new Rectangle(Width - 14 - 96, 11, 96, 28);
     private Rectangle TrashRect => new(Width - 14 - 80 - 8 - 28, 11, 28, 28);
+    private Rectangle OpenRect => new(16, FooterY, 118, FooterH);
+    private Rectangle CopyRect => new(16 + 118 + 8, FooterY, 88, FooterH);
     private bool ActionsShown => !_hideActions;
+
+    private void LayoutPad() => _pad.SetBounds(16, PadTop, W - 32, PadBottom - PadTop);
 
     // ---- public API ----
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; });
@@ -125,28 +148,70 @@ internal sealed class NotesPanel : Form
         UpdateHideActions();
     });
 
-    /// <summary>A recording began: lines already on the pad (an agenda) get [00:00:00]; new lines stamp live.</summary>
+    /// <summary>A recording began. The previous meeting's untouched notes are cleared; anything typed since
+    /// (an agenda) stays and gets [00:00:00]. The status line and footer buttons of the previous meeting go.</summary>
     public void ShowRecording(DateTime startedLocal) => Ui(() =>
     {
         _recording = true;
         _discardArmed = false;
         _startedLocal = startedLocal;
+        if (_stale) ClearPad();
+        _stale = false;
+        _jobStamp = null;
+        _status = "";
+        _hasTranscript = false;
+        _toast = null;
         for (int i = 0; i < _lineStamps.Count; i++) _lineStamps[i] = TimeSpan.Zero;
+        LayoutPad();
         if (!Visible) { RestorePosition(); Show(); }
         Invalidate();
     });
 
-    /// <summary>The recording ended (kept or discarded): the pad is cleared for the next one.</summary>
-    public void SetIdle() => Ui(() =>
+    /// <summary>The recording ended and is being kept: the pad stays readable while the job runs; the status
+    /// line follows that job (<see cref="SetJobStatus"/>) and the footer appears once its transcript exists.</summary>
+    public void EndRecording(string stamp) => Ui(() =>
     {
         _recording = false;
         _discardArmed = false;
         _readyClock = DateTime.Now.ToString("h:mm tt");
         _save.Stop();
-        _suppressTextChanged = true;
-        _pad.Clear();
-        _suppressTextChanged = false;
-        _lineStamps.Clear();
+        _stale = _pad.TextLength > 0;
+        _jobStamp = stamp;
+        _status = "Transcribing…";
+        _hasTranscript = false;
+        Invalidate();
+    });
+
+    /// <summary>The recording was discarded: nothing to follow, the notes went with the audio.</summary>
+    public void Discarded() => Ui(() =>
+    {
+        _recording = false;
+        _discardArmed = false;
+        _readyClock = DateTime.Now.ToString("h:mm tt");
+        _save.Stop();
+        ClearPad();
+        _stale = false;
+        _jobStamp = null;
+        _status = "";
+        _hasTranscript = false;
+        LayoutPad();
+        Invalidate();
+    });
+
+    /// <summary>Job progress for the meeting whose notes are on screen; other meetings' updates are ignored.</summary>
+    public void SetJobStatus(string stamp, string status) => Ui(() =>
+    {
+        if (stamp != _jobStamp) return;
+        _status = status;
+        Invalidate();
+    });
+
+    /// <summary>That meeting's transcript is on disk: show Open transcript / Copy path.</summary>
+    public void SetTranscriptReady(string stamp) => Ui(() =>
+    {
+        if (stamp != _jobStamp || _hasTranscript) return;
+        _hasTranscript = true;
+        LayoutPad();
         Invalidate();
     });
 
@@ -164,12 +229,21 @@ internal sealed class NotesPanel : Form
         return list;
     }
 
+    private void ClearPad()
+    {
+        _suppressTextChanged = true;
+        _pad.Clear();
+        _suppressTextChanged = false;
+        _lineStamps.Clear();
+    }
+
     // ---- stamping: keep one stamp per logical line, inserted/removed where the caret edited ----
     private TimeSpan Now() => _recording ? DateTime.Now - _startedLocal : TimeSpan.Zero;
 
     private void OnPadTextChanged(object? sender, EventArgs e)
     {
         if (_suppressTextChanged) return;
+        _stale = false; // the user is working on this text; Record keeps it
         var text = _pad.Text;
         int n = text.Length == 0 ? 0 : CountNewlines(text, text.Length) + 1;
         int caretLine = CountNewlines(text, Math.Min(_pad.SelectionStart, text.Length));
@@ -213,8 +287,28 @@ internal sealed class NotesPanel : Form
     private void OnTick(object? sender, EventArgs e)
     {
         if (_discardArmed && (DateTime.Now - _discardArmedAt).TotalSeconds > 3.5) { _discardArmed = false; Invalidate(); }
+        if (_toast != null && (DateTime.Now - _toastAt).TotalSeconds > 1.5) { _toast = null; Invalidate(); }
         if (_recording) Invalidate(new Rectangle(0, 0, Width, PadTop));
     }
+
+    // ---- footer actions ----
+    private void OpenTranscript()
+    {
+        var path = _jobStamp == null ? null : TranscriptResolver?.Invoke(_jobStamp);
+        if (path == null) { Toast("No transcript yet"); return; }
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true }); }
+        catch { Toast("Could not open it"); }
+    }
+
+    private void CopyPath()
+    {
+        var path = _jobStamp == null ? null : TranscriptResolver?.Invoke(_jobStamp);
+        if (path == null) { Toast("No transcript yet"); return; }
+        try { Clipboard.SetText(path); Toast("Path copied"); }
+        catch { Toast("Clipboard busy, try again"); }
+    }
+
+    private void Toast(string text) { _toast = text; _toastAt = DateTime.Now; Invalidate(); }
 
     // ---- painting ----
     protected override void OnPaint(PaintEventArgs e)
@@ -230,13 +324,31 @@ internal sealed class NotesPanel : Form
         DrawHeader(g);
         using (var dp = new Pen(Divider)) g.DrawLine(dp, 16, HeaderDivY, Width - 16, HeaderDivY);
 
-        (string hint, Color hintCol) = _recording && _discardArmed
-            ? ("Click the trash again to DELETE this recording.", Red)
-            : _recording
-                ? ("Every line here goes into Odin's summary.", VMuted)
-                : ("Type an agenda now; it joins the next recording.", VMuted);
+        (string hint, Color hintCol) = HintLine();
         TextRenderer.DrawText(g, hint, _hintFont, new Rectangle(16, HintY, Width - 32, 14), hintCol,
-            TextFormatFlags.NoPrefix | TextFormatFlags.Left);
+            TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+
+        if (_hasTranscript)
+        {
+            DrawFooterButton(g, OpenRect, "Open transcript", _hoverFooter == 0);
+            DrawFooterButton(g, CopyRect, "Copy path", _hoverFooter == 1);
+        }
+    }
+
+    // The one line under the header: the discard hint while armed, the job's progress after a meeting, a
+    // transient toast, else what the pad is for right now.
+    private (string, Color) HintLine()
+    {
+        if (_recording && _discardArmed) return ("Click the trash again to DELETE this recording.", Red);
+        if (_toast != null) return (_toast, Green);
+        if (_recording) return ("Every line here goes into Odin's summary.", VMuted);
+        if (_jobStamp != null && _status.Length > 0)
+        {
+            var col = _status.StartsWith("Failed", StringComparison.Ordinal) ? Red
+                : _status.StartsWith("✓", StringComparison.Ordinal) ? Green : Muted;
+            return (_status, col);
+        }
+        return ("Type an agenda now; it joins the next recording.", VMuted);
     }
 
     private void DrawHeader(Graphics g)
@@ -255,6 +367,20 @@ internal sealed class NotesPanel : Form
         if (!ActionsShown) return;
         DrawActionPill(g, Pill, _recording);
         if (_recording) DrawTrash(g, TrashRect, _discardHover, _discardArmed);
+    }
+
+    // A ghost pill: thin border, muted text, filled faintly on hover.
+    private void DrawFooterButton(Graphics g, Rectangle rect, string text, bool hover)
+    {
+        using var path = Rounded(rect, 8);
+        if (hover)
+        {
+            using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
+            g.FillPath(hb, path);
+        }
+        using (var pen = new Pen(Color.FromArgb(56, 255, 255, 255))) g.DrawPath(pen, path);
+        TextRenderer.DrawText(g, text, _footFont, rect, hover ? TitleCol : Muted,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
     }
 
     private void DrawTrash(Graphics g, Rectangle rect, bool hover, bool armed)
@@ -308,7 +434,7 @@ internal sealed class NotesPanel : Form
         return $"{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
     }
 
-    // ---- mouse (the header; the pad handles its own) ----
+    // ---- mouse (the header + footer; the pad handles its own) ----
     protected override void OnMouseDown(MouseEventArgs e)
     {
         if (e.Button == MouseButtons.Right) { HideRequested?.Invoke(); return; }
@@ -321,6 +447,8 @@ internal sealed class NotesPanel : Form
             Invalidate();
             return;
         }
+        if (_hasTranscript && OpenRect.Contains(e.Location)) { OpenTranscript(); return; }
+        if (_hasTranscript && CopyRect.Contains(e.Location)) { CopyPath(); return; }
         _dragging = true;
         _dragMoved = false;
         _dragOrigin = e.Location;
@@ -338,6 +466,8 @@ internal sealed class NotesPanel : Form
         if (b != _btnHover) { _btnHover = b; Invalidate(); }
         bool th = ActionsShown && _recording && TrashRect.Contains(e.Location);
         if (th != _discardHover) { _discardHover = th; Invalidate(); }
+        int f = !_hasTranscript ? -1 : OpenRect.Contains(e.Location) ? 0 : CopyRect.Contains(e.Location) ? 1 : -1;
+        if (f != _hoverFooter) { _hoverFooter = f; Invalidate(); }
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -349,9 +479,10 @@ internal sealed class NotesPanel : Form
     {
         base.OnMouseLeave(e);
         if (_dragging) return;
-        bool changed = _btnHover || _discardHover;
+        bool changed = _btnHover || _discardHover || _hoverFooter != -1;
         _btnHover = false;
         _discardHover = false;
+        _hoverFooter = -1;
         if (changed) Invalidate();
     }
 
@@ -456,6 +587,7 @@ internal sealed class NotesPanel : Form
             _pillFont.Dispose();
             _hintFont.Dispose();
             _padFont.Dispose();
+            _footFont.Dispose();
         }
         base.Dispose(disposing);
     }

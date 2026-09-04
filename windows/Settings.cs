@@ -62,4 +62,29 @@ internal static class Settings
             catch { /* non-fatal */ }
         }
     }
+
+    /// <summary>When the Notes window shows: "always" (paired with the recorder; the default on Windows),
+    /// "record" (opens when a recording starts), or "off". File notes.txt; anything else reads as "always".</summary>
+    public static string NotesMode
+    {
+        get
+        {
+            try
+            {
+                var f = FilePath("notes.txt");
+                var v = File.Exists(f) ? File.ReadAllText(f).Trim().ToLowerInvariant() : "always";
+                return v is "off" or "record" ? v : "always";
+            }
+            catch { return "always"; }
+        }
+        set
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath("notes.txt"))!);
+                File.WriteAllText(FilePath("notes.txt"), value);
+            }
+            catch { /* non-fatal */ }
+        }
+    }
 }

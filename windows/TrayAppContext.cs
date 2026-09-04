@@ -24,6 +24,8 @@ internal sealed class TrayAppContext : ApplicationContext
     private readonly MeetingOverlay? _meetingOverlay;
     private readonly MeetingPanel _panel;
     private readonly NotesPanel _notes;
+    private string _notesMode = "always";
+    private ToolStripMenuItem _notesOffItem = null!, _notesAlwaysItem = null!, _notesRecordItem = null!;
     private ToolStripMenuItem _meetingItem = null!;
     private ToolStripMenuItem _discardItem = null!;
     private ToolStripMenuItem _sendMeetingsItem = null!;
@@ -82,16 +84,20 @@ internal sealed class TrayAppContext : ApplicationContext
         _panel.CancelRequested += CancelJob;
         _panel.DiscardRequested += () => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); };
         _meeting.LevelChanged += _panel.SetLevel;
-        // The notepad pairs with the recorder: same controls, follows its show/hide, sits beside it.
+        // The notepad: the recorder's controls, beside it. Settings.NotesMode says when it shows — "always"
+        // (paired with the recorder's show/hide), "record" (opens when a recording starts), or "off".
+        _notesMode = Settings.NotesMode;
         _notes = new NotesPanel();
         _notes.RecordToggleRequested += ToggleMeeting;
         _notes.DiscardRequested += () => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); };
         _notes.NotesChanged += SaveNotes;
-        _notes.HideRequested += () => _panel.HidePanel();
+        _notes.TranscriptResolver = _panel.TranscriptPathFor;
+        _notes.HideRequested += () => { if (_notesMode == "always") _panel.HidePanel(); else _notes.HidePanel(); };
         _panel.LocationChanged += (_, _) => _notes.RecorderChanged(_panel.Bounds, _panel.Visible);
         _panel.VisibleChanged += (_, _) =>
         {
             _notes.RecorderChanged(_panel.Bounds, _panel.Visible);
+            if (_notesMode != "always") return;
             if (_panel.Visible) _notes.ShowPanel(); else _notes.HidePanel();
         };
         _sendMeetings = Settings.SendMeetingsToOdin;
@@ -212,6 +218,13 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(_sendMeetingsItem);
         _panelItem = new ToolStripMenuItem("Show recorder panel", null, (_, _) => TogglePanel()) { Checked = _panelVisible };
         menu.Items.Add(_panelItem);
+        var notesMenu = new ToolStripMenuItem("Notes window");
+        _notesOffItem = new ToolStripMenuItem("Off", null, (_, _) => SetNotesMode("off"));
+        _notesAlwaysItem = new ToolStripMenuItem("Always on, beside the recorder", null, (_, _) => SetNotesMode("always"));
+        _notesRecordItem = new ToolStripMenuItem("Open when a recording starts", null, (_, _) => SetNotesMode("record"));
+        notesMenu.DropDownItems.AddRange(new ToolStripItem[] { _notesOffItem, _notesAlwaysItem, _notesRecordItem });
+        menu.Items.Add(notesMenu);
+        RefreshNotesModeChecks();
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Quit", null, (_, _) => Quit()));
         return menu;
@@ -284,6 +297,23 @@ internal sealed class TrayAppContext : ApplicationContext
         Settings.SendMeetingsToOdin = _sendMeetings;
     }
 
+    private void SetNotesMode(string mode)
+    {
+        _notesMode = mode;
+        Settings.NotesMode = mode;
+        RefreshNotesModeChecks();
+        if (mode == "always") { if (_panel.Visible) _notes.ShowPanel(); }
+        else if (mode == "off") _notes.HidePanel();
+        // "record": leave the window as it is; it opens with the next recording.
+    }
+
+    private void RefreshNotesModeChecks()
+    {
+        _notesOffItem.Checked = _notesMode == "off";
+        _notesAlwaysItem.Checked = _notesMode == "always";
+        _notesRecordItem.Checked = _notesMode == "record";
+    }
+
     private void TogglePanel()
     {
         _panelVisible = !_panelVisible;
@@ -323,11 +353,14 @@ internal sealed class TrayAppContext : ApplicationContext
         SetStatus("● Recording meeting…");
         OnUi(() => _meetingOverlay?.ShowRecording(_meeting.StartedLocal));
         _panel.ShowRecording(_meeting.StartedLocal);
-        _notes.ShowRecording(_meeting.StartedLocal);
-        SaveNotes(); // an agenda typed before Record joins the file at [00:00:00]
-        // Hand the keyboard to the pad only when Record was clicked in one of Munin's own windows; a start from
-        // the tray menu must not pull focus away from the call.
-        if (Form.ActiveForm == _panel || Form.ActiveForm == _notes) _notes.FocusPad();
+        if (_notesMode != "off")
+        {
+            _notes.ShowRecording(_meeting.StartedLocal); // opens the window too, when it was hidden
+            SaveNotes(); // an agenda typed before Record joins the file at [00:00:00]
+            // Hand the keyboard to the pad only when Record was clicked in one of Munin's own windows; a start
+            // from the tray menu must not pull focus away from the call.
+            if (Form.ActiveForm == _panel || Form.ActiveForm == _notes) _notes.FocusPad();
+        }
     }
 
     // Shared teardown for BOTH stop paths: capture flushed + UI back to ready IMMEDIATELY — the next
@@ -346,7 +379,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _discardItem.Enabled = false;
         OnUi(() => _meetingOverlay?.HideOverlay());
         _panel.SetIdle();
-        _notes.SetIdle();
+        if (cap != null) _notes.EndRecording(cap.Stamp); // the pad stays; the status line follows the job
         return cap;
     }
 
@@ -368,6 +401,7 @@ internal sealed class TrayAppContext : ApplicationContext
             try { if (File.Exists(cap.LoopPath)) File.Delete(cap.LoopPath); } catch { /* best effort */ }
             try { if (File.Exists(cap.NotesPath)) File.Delete(cap.NotesPath); } catch { /* best effort */ }
         }
+        _notes.Discarded();
         SetStatus("Recording discarded");
         ShowInfo("Munin — recording discarded", "The meeting audio was deleted; nothing was transcribed or filed.");
     }
@@ -408,9 +442,11 @@ internal sealed class TrayAppContext : ApplicationContext
             var r = await MeetingProcessor.TranscribeAsync(cap, _transcriber, cts.Token);
             MuninLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
             _panel.SetJobTranscript(jobId, r.TranscriptPath);
+            _notes.SetTranscriptReady(cap.Stamp);
             if (_sendMeetings)
             {
                 _panel.SetJobStatus(jobId, "Filing to Odin…", JobTone.Busy, cancelable: true);
+                _notes.SetJobStatus(cap.Stamp, "Filing to Odin…");
                 try
                 {
                     var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd"), notes, cts.Token);
@@ -418,6 +454,7 @@ internal sealed class TrayAppContext : ApplicationContext
                     if (!string.IsNullOrWhiteSpace(odin.Title)) _panel.SetJobTitle(jobId, odin.Title);
                     var sec = string.IsNullOrEmpty(odin.SecondaryType) ? "" : $" + {odin.SecondaryType}";
                     _panel.SetJobStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
+                    _notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {odin.Title}");
                     ShowInfo("Munin — meeting filed to Odin", $"{odin.Classification} · {odin.TaskCount} task(s){sec}\n{odin.Title}");
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
@@ -425,6 +462,7 @@ internal sealed class TrayAppContext : ApplicationContext
                 {
                     MuninLog.Write($"meeting {cap.Stamp}: Odin filing failed", ex);
                     _panel.SetJobStatus(jobId, "Saved · Odin offline", JobTone.Warn, cancelable: false);
+                    _notes.SetJobStatus(cap.Stamp, "Saved · Odin offline");
                     ShowBalloon("Munin — Odin not reachable", $"Saved the transcript to disk; file it later.\n{Path.GetFileName(r.TranscriptPath)}");
                     OpenInExplorer(r.TranscriptPath);
                 }
@@ -432,6 +470,7 @@ internal sealed class TrayAppContext : ApplicationContext
             else
             {
                 _panel.SetJobStatus(jobId, "Saved", JobTone.Good, cancelable: false);
+                _notes.SetJobStatus(cap.Stamp, "✓ Transcript saved");
                 ShowInfo("Munin — meeting transcript ready", Path.GetFileName(r.TranscriptPath));
                 OpenInExplorer(r.TranscriptPath);
             }
@@ -440,11 +479,13 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             MuninLog.Write($"meeting {cap.Stamp}: cancelled by user after {sw.Elapsed:m\\:ss}");
             _panel.SetJobStatus(jobId, "Cancelled", JobTone.Muted, cancelable: false);
+            _notes.SetJobStatus(cap.Stamp, "Cancelled");
         }
         catch (Exception ex)
         {
             MuninLog.Write($"meeting {cap.Stamp}: FAILED after {sw.Elapsed:m\\:ss}", ex);
             _panel.SetJobStatus(jobId, $"Failed · {ShortReason(ex)}", JobTone.Bad, cancelable: false);
+            _notes.SetJobStatus(cap.Stamp, $"Failed · {ShortReason(ex)}");
             ShowBalloon("Munin — meeting processing failed", $"{ex.Message}\nDetails: {Paths.LogPath()}");
         }
         finally

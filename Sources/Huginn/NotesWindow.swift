@@ -83,6 +83,9 @@ final class NotesWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         let buttons = NSStackView(views: [stopButton, discardButton, openButton, copyButton])
         buttons.orientation = .horizontal
         buttons.spacing = 6
+        // The label stretches, the buttons keep to their size: that pins the buttons to the right edge.
+        buttons.setContentHuggingPriority(.required, for: .horizontal)
+        statusLabel.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .horizontal)
 
         let header = NSStackView(views: [statusLabel, buttons])
         header.orientation = .horizontal

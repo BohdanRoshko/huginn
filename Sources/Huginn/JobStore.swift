@@ -16,11 +16,21 @@ struct Job: Codable, Identifiable {
     var status: Status
     var detail: String?
     var transcriptPath: String?
+    /// The name the user gave it (Rename in the menu); the transcript file carries it too.
+    var name: String?
+
+    var stamp: String { Paths.stamp(startedAt) }
+
+    /// The menu line: the name when there is one (the time moves into the detail), else the time.
+    var menuTitle: String {
+        if let name, !name.isEmpty { return "\(name) — \(timeTitle) · \(statusLine)" }
+        return "\(timeTitle) — \(statusLine)"
+    }
 
     /// Time alone is ambiguous the moment the list spans days — two entries
     /// reading "9:15 AM" and "2:02 PM" give no clue they are from different
     /// meetings on different dates. Today stays bare; anything older says so.
-    var title: String {
+    var timeTitle: String {
         let f = DateFormatter()
         f.timeStyle = .short
         if Calendar.current.isDateInToday(startedAt) {
@@ -63,6 +73,11 @@ final class JobStore {
             persist()
         }
         DispatchQueue.main.async { [weak self] in self?.onChange?() }
+    }
+
+    /// A snapshot of one job, safe from any thread (the transcription task reads it).
+    func job(_ id: UUID) -> Job? {
+        queue.sync { jobs.first { $0.id == id } }
     }
 
     func update(_ id: UUID, _ mutate: (inout Job) -> Void) {

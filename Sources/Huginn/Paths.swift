@@ -1,4 +1,5 @@
 import Foundation
+import HuginnCore
 
 enum Paths {
     /// ~/Library/Application Support/Huginn — not TCC-protected, so the app can
@@ -44,6 +45,16 @@ enum Paths {
         f.dateFormat = "yyyy-MM-dd_HHmmss"
         f.locale = Locale(identifier: "en_US_POSIX")
         return f.string(from: date)
+    }
+
+    /// `{stamp}_{name}.txt` once the meeting is named, else `{stamp}_transcript.txt` (see TranscriptNaming).
+    static func transcriptURL(stamp: String, name: String?) -> URL {
+        recordings.appendingPathComponent(TranscriptNaming.fileName(stamp: stamp, name: name))
+    }
+
+    /// The notes typed during a recording, beside its WAV tracks.
+    static func notesURL(stamp: String) -> URL {
+        recordings.appendingPathComponent("\(stamp)_notes.md")
     }
 }
 

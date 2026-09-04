@@ -76,8 +76,20 @@ cost is that system audio sits behind the Screen Recording permission.
   processing. A dialog offers to open the transcript when it's ready.
 - **Stop & Discard** — stops and deletes the audio, transcribes nothing. For a
   meeting you decide you don't want to keep.
-- **Recent** — the last 5 meetings and their status. Click a finished one to
-  open its transcript.
+- **Recent** — the last 5 meetings and their status. Each one is a submenu:
+  **Open Transcript**, **Rename…** (the transcript file takes the name too:
+  `{stamp}_{name}.txt`), **Show in Finder**, **Copy Path**. A name given while
+  a meeting is still transcribing applies when the transcript is written.
+- **Notes** — a floating notepad for the meeting, off by default. **Always On**
+  keeps it open; **Open When Recording Starts** opens it (or clears it) at
+  Start Recording. Its header shows the running time and the same Stop /
+  Discard as the menu; after Stop it reads "Transcribing…" and then offers
+  **Open transcript** / **Copy path** until the next recording starts. Every
+  line is saved to `{stamp}_notes.md` beside the WAV files, stamped
+  `[hh:mm:ss]` with the second you began the line — the transcript's own
+  clock — so the two can be read side by side. Lines typed before Start carry
+  `[00:00:00]`. Start clears the previous meeting's untouched notes; anything
+  you typed since stays.
 - **Open Log** — if something goes wrong, this is the file to send back.
 
 Transcription takes roughly a fifth of the meeting's length on Apple Silicon, so
@@ -129,14 +141,20 @@ bundle, so permission behaviour is only representative from a real `.app`.
 ```
 Sources/Huginn/
   main.swift            NSApplication bootstrap, menu-bar-only activation policy
-  AppDelegate.swift     menu, state machine, transcription pipeline
+  AppDelegate.swift     menu, state machine, transcription pipeline, rename, notes lifecycle
+  NotesWindow.swift     the floating notepad (status, Stop/Discard, Open/Copy, stamped lines)
   Recorder.swift        2-track capture: AVAudioEngine mic + SCStream system audio
   AudioTrackWriter.swift  format conversion to 16 kHz mono WAV
   Transcriber.swift     whisper-cli subprocess + JSON parsing
-  Transcript.swift      timestamp interleave into the Me/Them format
   ModelDownloader.swift first-run model fetch
-  JobStore.swift        the recent-meetings list, persisted
+  JobStore.swift        the recent-meetings list, persisted (with the user's name per meeting)
   Paths.swift           locations + config constants
+Sources/HuginnCore/     pure Foundation, covered by `swift test`
+  Transcript.swift      timestamp interleave into the Me/Them format
+  TranscriptReconciler.swift  text-based de-echo
+  MeetingNotes.swift    the notes file shape ([hh:mm:ss] text per line)
+  LineStamps.swift      one stamp per notepad line, kept aligned as you edit
+  TranscriptNaming.swift  {stamp}_{name}.txt, file-safe
 ```
 
 ## Known limits

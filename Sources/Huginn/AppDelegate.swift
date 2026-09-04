@@ -14,6 +14,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tickTimer: Timer?
     private var busy = false
 
+    private lazy var notes: NotesWindow = makeNotesWindow()
+    private var notesMode = NotesMode.load()
+    /// The finished meeting the notes window's status and footer buttons refer to.
+    private var notesJobID: UUID?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         Paths.ensureDirectories()
         log("Huginn launched")
@@ -33,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         updateIcon()
         rebuildMenu()
+        if notesMode == .always { notes.show() }
 
         // CI-only: drive a whole record/transcribe cycle and exit, to find out
         // whether audio capture actually works on this machine.
@@ -58,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 try? await self.recorder.start()
-                self.recordingStarted = Date()
+                self.recordingStarted = self.recorder.startedAt ?? Date()
                 self.startTicking()
                 self.updateIcon()
                 self.rebuildMenu()
@@ -70,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         if recorder.isRecording {
+            saveNotes()
             // Flush the WAVs so the audio survives even though we are quitting
             // before it could be transcribed. MUST be detached: a plain Task
             // would inherit the main actor and deadlock against the wait below.
@@ -101,8 +108,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             do {
                 try await recorder.start()
-                recordingStarted = Date()
+                // The recorder's own start is the stamp on the WAVs, so the notes file must use it too.
+                recordingStarted = recorder.startedAt ?? Date()
                 startTicking()
+                if notesMode != .off {
+                    notes.startRecording(at: recordingStarted ?? Date())
+                    notes.focus()
+                    saveNotes() // an agenda typed before Start joins the file at [00:00:00]
+                }
             } catch {
                 present(error)
             }
@@ -117,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
 
         Task { @MainActor in
+            saveNotes() // the last edits, before the recorder stops accepting them
             let capture = await recorder.stop()
             stopTicking()
             recordingStarted = nil
@@ -133,6 +147,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 transcriptPath: nil
             )
             jobs.upsert(job)
+            if notesMode != .off {
+                notesJobID = capture.id
+                notes.endRecording()
+            }
 
             // Detached so the menu returns to idle at once and the next meeting
             // can start while this one is still being transcribed.
@@ -156,8 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         busy = true
         rebuildMenu()
+        let stamp = recorder.startedAt.map(Paths.stamp)
         Task { @MainActor in
             await recorder.discard()
+            if let stamp { try? FileManager.default.removeItem(at: Paths.notesURL(stamp: stamp)) }
+            if notesMode != .off { notes.discarded() }
             stopTicking()
             recordingStarted = nil
             busy = false
@@ -183,7 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let cleaned = TranscriptReconciler.deEcho(text)
 
             let base = capture.meURL.deletingLastPathComponent()
-            let out = base.appendingPathComponent(Paths.stamp(capture.startedAt) + "_transcript.txt")
+            // A name given while this was still transcribing applies now.
+            let name = jobs.job(capture.id)?.name
+            let out = base.appendingPathComponent(
+                TranscriptNaming.fileName(stamp: Paths.stamp(capture.startedAt), name: name)
+            )
             try cleaned.text.write(to: out, atomically: true, encoding: .utf8)
 
             // Keep the pre-de-echo version only when something was actually
@@ -203,6 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 $0.transcriptPath = out.path
             }
             log("transcript written -> \(out.lastPathComponent)")
+            notesFollow(capture.id) { $0.setStatus("Transcript ready"); $0.setTranscriptReady() }
             notifyDone(at: out)
         } catch {
             jobs.update(capture.id) {
@@ -210,7 +236,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 $0.detail = error.localizedDescription
             }
             log("transcription failed: \(error.localizedDescription)")
+            notesFollow(capture.id) { $0.setStatus("Failed — \(error.localizedDescription)") }
         }
+    }
+
+    /// Update the notes window only when it is still showing THIS meeting's notes.
+    private func notesFollow(_ id: UUID, _ apply: @escaping (NotesWindow) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.notesMode != .off, self.notesJobID == id else { return }
+            apply(self.notes)
+        }
+    }
+
+    // MARK: - notes
+
+    private func makeNotesWindow() -> NotesWindow {
+        let w = NotesWindow()
+        w.onStop = { [weak self] in self?.toggleRecording() }
+        w.onDiscard = { [weak self] in self?.discardRecording() }
+        w.onNotesChanged = { [weak self] in self?.saveNotes() }
+        w.transcriptResolver = { [weak self] in
+            guard let self, let id = self.notesJobID, let path = self.jobs.job(id)?.transcriptPath else { return nil }
+            return URL(fileURLWithPath: path)
+        }
+        return w
+    }
+
+    /// Rewrite {stamp}_notes.md from the pad — on every debounced change, before Stop, and on quit — so a
+    /// crash keeps everything typed and the file holds exactly what was on screen.
+    private func saveNotes() {
+        guard notesMode != .off, recorder.isRecording, let started = recorder.startedAt else { return }
+        let url = Paths.notesURL(stamp: Paths.stamp(started))
+        if let text = MeetingNotes.render(startedAt: started, lines: notes.snapshot()) {
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        } else {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    @objc private func setNotesMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let mode = NotesMode(rawValue: raw) else { return }
+        notesMode = mode
+        mode.save()
+        switch mode {
+        case .always: notes.show()
+        case .off: notes.hide()
+        case .onRecord: break // it opens with the next recording
+        }
+        rebuildMenu()
+    }
+
+    @objc private func showNotes() {
+        notes.focus()
+    }
+
+    // MARK: - rename
+
+    private func job(from sender: NSMenuItem) -> Job? {
+        guard let raw = sender.representedObject as? String, let id = UUID(uuidString: raw) else { return nil }
+        return jobs.job(id)
+    }
+
+    @objc private func renameJob(_ sender: NSMenuItem) {
+        guard let job = job(from: sender) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename meeting"
+        alert.informativeText = "The transcript file takes this name too."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = job.name ?? ""
+        field.placeholderString = job.timeTitle
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let typed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        apply(name: typed.isEmpty ? nil : typed, to: job)
+    }
+
+    /// Store the name and move the transcript to match, when it exists. A name given while the meeting
+    /// is still transcribing applies when the transcript is written (see `process`).
+    private func apply(name: String?, to job: Job) {
+        var newPath = job.transcriptPath
+        if let current = job.transcriptPath, FileManager.default.fileExists(atPath: current) {
+            var target = Paths.transcriptURL(stamp: job.stamp, name: name)
+            if target.path != current {
+                if FileManager.default.fileExists(atPath: target.path) {
+                    let base = target.deletingPathExtension().lastPathComponent
+                    target = target.deletingLastPathComponent().appendingPathComponent("\(base) (2).txt")
+                }
+                do {
+                    try FileManager.default.moveItem(at: URL(fileURLWithPath: current), to: target)
+                    newPath = target.path
+                    log("transcript renamed -> \(target.lastPathComponent)")
+                } catch {
+                    log("transcript rename failed: \(error.localizedDescription)")
+                }
+            }
+        }
+        jobs.update(job.id) {
+            $0.name = name
+            $0.transcriptPath = newPath
+        }
+    }
+
+    @objc private func revealJob(_ sender: NSMenuItem) {
+        guard let path = job(from: sender)?.transcriptPath else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    @objc private func copyJobPath(_ sender: NSMenuItem) {
+        guard let path = job(from: sender)?.transcriptPath else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
     }
 
     /// An empty track still produces a perfectly readable one-sided transcript,
@@ -254,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openJob(_ sender: NSMenuItem) {
-        guard let path = sender.representedObject as? String else { return }
+        guard let path = job(from: sender)?.transcriptPath else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
@@ -320,14 +459,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(header)
 
             for job in jobs.jobs {
-                let item = NSMenuItem(
-                    title: "   \(job.title) — \(job.statusLine)",
-                    action: job.transcriptPath == nil ? nil : #selector(openJob(_:)),
-                    keyEquivalent: ""
-                )
-                item.target = self
-                item.representedObject = job.transcriptPath
-                item.isEnabled = job.transcriptPath != nil
+                let item = NSMenuItem(title: "   \(job.menuTitle)", action: nil, keyEquivalent: "")
+                item.submenu = jobMenu(for: job)
                 menu.addItem(item)
             }
         }
@@ -342,11 +475,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logItem.target = self
         menu.addItem(logItem)
 
+        let notesItem = NSMenuItem(title: "Notes", action: nil, keyEquivalent: "")
+        notesItem.submenu = notesModeMenu()
+        menu.addItem(notesItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Huginn", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    /// Per-meeting actions. A submenu rather than a click action, so Rename sits next to Open.
+    private func jobMenu(for job: Job) -> NSMenu {
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+        let hasTranscript = job.transcriptPath.map { FileManager.default.fileExists(atPath: $0) } ?? false
+        let id = job.id.uuidString
+
+        let entries: [(String, Selector, Bool)] = [
+            ("Open Transcript", #selector(openJob(_:)), hasTranscript),
+            ("Rename…", #selector(renameJob(_:)), true),
+            ("Show in Finder", #selector(revealJob(_:)), hasTranscript),
+            ("Copy Path", #selector(copyJobPath(_:)), hasTranscript),
+        ]
+        for (title, action, enabled) in entries {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = id
+            item.isEnabled = enabled
+            sub.addItem(item)
+        }
+        return sub
+    }
+
+    private func notesModeMenu() -> NSMenu {
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+        let options: [(String, NotesMode)] = [
+            ("Off", .off),
+            ("Always On", .always),
+            ("Open When Recording Starts", .onRecord),
+        ]
+        for (title, mode) in options {
+            let item = NSMenuItem(title: title, action: #selector(setNotesMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.rawValue
+            item.state = notesMode == mode ? .on : .off
+            sub.addItem(item)
+        }
+        sub.addItem(.separator())
+        let show = NSMenuItem(title: "Show Notes Window", action: #selector(showNotes), keyEquivalent: "n")
+        show.target = self
+        show.isEnabled = notesMode != .off
+        sub.addItem(show)
+        return sub
     }
 
     private func statusLine() -> String {
@@ -429,5 +612,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "OK")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
+    }
+}
+
+/// When the Notes window shows. Off is the default on the Mac; Munin on Windows defaults to always on.
+enum NotesMode: String {
+    case off
+    case always
+    case onRecord
+
+    private static let key = "notesMode"
+
+    static func load() -> NotesMode {
+        NotesMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .off
+    }
+
+    func save() {
+        UserDefaults.standard.set(rawValue, forKey: NotesMode.key)
     }
 }

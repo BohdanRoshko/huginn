@@ -26,7 +26,7 @@ final class Recorder: NSObject {
     private let videoQueue = DispatchQueue(label: "huginn.scstream.video")
 
     private var currentID: UUID?
-    private var startedAt: Date?
+    private(set) var startedAt: Date?
     private var meURL: URL?
     private var themURL: URL?
 

@@ -242,18 +242,16 @@ final class NotesWindow: NSObject, NSWindowDelegate, NSTextViewDelegate {
         openButton.isHidden = recording || !transcriptReady
         copyButton.isHidden = recording || !transcriptReady
 
+        hintLabel.stringValue = ""
         if recording {
             statusLabel.stringValue = "● REC " + clock()
             statusLabel.textColor = .systemRed
-            hintLabel.stringValue = "Every line is saved with the time you wrote it."
         } else if !status.isEmpty {
             statusLabel.stringValue = status
             statusLabel.textColor = status.hasPrefix("Failed") ? .systemRed : .labelColor
-            hintLabel.stringValue = transcriptReady ? "Notes stay until the next recording starts." : ""
         } else {
             statusLabel.stringValue = "Idle"
             statusLabel.textColor = .secondaryLabelColor
-            hintLabel.stringValue = "Type an agenda now; it joins the next recording."
         }
     }
 

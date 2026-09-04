@@ -80,6 +80,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _panel.RecordToggleRequested += ToggleMeeting;
         _panel.CancelRequested += CancelJob;
         _panel.DiscardRequested += () => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); };
+        _panel.NoteCommitted += OnNoteCommitted;
         _meeting.LevelChanged += _panel.SetLevel;
         _sendMeetings = Settings.SendMeetingsToOdin;
         _panelVisible = Settings.MeetingPanelVisible;
@@ -345,9 +346,18 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             try { if (File.Exists(cap.MicPath)) File.Delete(cap.MicPath); } catch { /* best effort */ }
             try { if (File.Exists(cap.LoopPath)) File.Delete(cap.LoopPath); } catch { /* best effort */ }
+            try { if (File.Exists(cap.NotesPath)) File.Delete(cap.NotesPath); } catch { /* best effort */ }
         }
         SetStatus("Recording discarded");
         ShowInfo("Munin — recording discarded", "The meeting audio was deleted; nothing was transcribed or filed.");
+    }
+
+    // A note line committed in the panel while recording: stamp it with the offset from the recording start and
+    // append it to the meeting's notes file at once (a crash keeps everything typed so far).
+    private void OnNoteCommitted(TimeSpan at, string text)
+    {
+        if (!_meeting.IsRecording) return;
+        MeetingNotes.Append(_meeting.NotesPath, _meeting.StartedLocal, at, text);
     }
 
     // User clicked ✕ on an in-flight row: cancel that job's transcription / Odin filing. The transcript and
@@ -371,7 +381,8 @@ internal sealed class TrayAppContext : ApplicationContext
         var cts = new CancellationTokenSource();
         _jobCts[jobId] = cts;
         var sw = Stopwatch.StartNew();
-        MuninLog.Write($"meeting {cap.Stamp}: processing started (me={FileSize(cap.MicPath)}, them={FileSize(cap.LoopPath)})");
+        var notes = MeetingNotes.Read(cap.NotesPath);
+        MuninLog.Write($"meeting {cap.Stamp}: processing started (me={FileSize(cap.MicPath)}, them={FileSize(cap.LoopPath)}, notes={(notes == null ? "none" : $"{notes.Count(c => c == '\n') + 1} lines")})");
         try
         {
             var r = await MeetingProcessor.TranscribeAsync(cap, _transcriber, cts.Token);
@@ -382,7 +393,7 @@ internal sealed class TrayAppContext : ApplicationContext
                 _panel.SetJobStatus(jobId, "Filing to Odin…", JobTone.Busy, cancelable: true);
                 try
                 {
-                    var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd"), cts.Token);
+                    var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd"), notes, cts.Token);
                     MuninLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
                     if (!string.IsNullOrWhiteSpace(odin.Title)) _panel.SetJobTitle(jobId, odin.Title);
                     var sec = string.IsNullOrEmpty(odin.SecondaryType) ? "" : $" + {odin.SecondaryType}";

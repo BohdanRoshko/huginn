@@ -5,7 +5,7 @@ namespace Munin;
 
 /// <summary>A finished capture, snapshotted so the recorder is immediately free to record again while
 /// this one is transcribed/filed in the background.</summary>
-internal sealed record MeetingCapture(string Stamp, string MicPath, string LoopPath, DateTime StartedLocal);
+internal sealed record MeetingCapture(string Stamp, string MicPath, string LoopPath, string NotesPath, DateTime StartedLocal);
 
 /// <summary>
 /// Records a meeting as TWO tracks (the SKILL's free-diarization win): the microphone is "Me" and a
@@ -29,11 +29,15 @@ internal sealed class MeetingRecorder : IDisposable
     private WaveFileWriter? _loopWriter;
     private TaskCompletionSource _micStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource _loopStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private string _micPath = "", _loopPath = "", _stamp = "";
+    private string _micPath = "", _loopPath = "", _notesPath = "", _stamp = "";
     private volatile bool _recording;
 
     public bool IsRecording => _recording;
     public DateTime StartedLocal { get; private set; }
+
+    /// <summary>Where the notes typed during THIS recording go (<see cref="MeetingNotes"/>): `{stamp}_notes.md`
+    /// next to the WAV tracks. The recorder never writes it; the panel's note lines are appended by the app.</summary>
+    public string NotesPath => _notesPath;
 
     /// <summary>Live combined input level 0..1 (max of mic + system audio per buffer) — drives the panel's
     /// voice-level meter. Raised from the capture threads.</summary>
@@ -49,6 +53,7 @@ internal sealed class MeetingRecorder : IDisposable
         _stamp = StartedLocal.ToString("yyyy-MM-dd_HHmmss", CultureInfo.InvariantCulture);
         _micPath = Path.Combine(dir, $"{_stamp}_me.wav");
         _loopPath = Path.Combine(dir, $"{_stamp}_them.wav");
+        _notesPath = Path.Combine(dir, $"{_stamp}_notes.md");
         _micStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _loopStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -144,7 +149,7 @@ internal sealed class MeetingRecorder : IDisposable
             _mic?.Dispose(); _mic = null;
             _loop?.Dispose(); _loop = null;
         }
-        return string.IsNullOrEmpty(_stamp) ? null : new MeetingCapture(_stamp, _micPath, _loopPath, StartedLocal);
+        return string.IsNullOrEmpty(_stamp) ? null : new MeetingCapture(_stamp, _micPath, _loopPath, _notesPath, StartedLocal);
     }
 
     public void Dispose()

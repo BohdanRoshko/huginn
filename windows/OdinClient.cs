@@ -17,10 +17,12 @@ internal static class OdinClient
     // Analysis + ingest can take a while on a long transcript (local Claude pass); give it room.
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(300) };
 
-    public static async Task<OdinMeetingResult> ProcessMeetingAsync(string transcript, string? date, CancellationToken ct = default)
+    /// <param name="notes">The lines typed in the panel while it recorded (<see cref="MeetingNotes"/>), or null.
+    /// Odin treats every line as a must-include and expands it from the transcript around its stamp.</param>
+    public static async Task<OdinMeetingResult> ProcessMeetingAsync(string transcript, string? date, string? notes, CancellationToken ct = default)
     {
         using var resp = await Http.PostAsJsonAsync(
-            $"{Config.OdinBaseUrl}/api/meetings/process", new { transcript, date }, ct);
+            $"{Config.OdinBaseUrl}/api/meetings/process", new { transcript, date, notes }, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
             throw new InvalidOperationException($"Odin {(int)resp.StatusCode}: {Trunc(body)}");

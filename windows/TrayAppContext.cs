@@ -54,6 +54,7 @@ internal sealed class TrayAppContext : ApplicationContext
     public TrayAppContext()
     {
         _modelPath = Paths.ModelPath();
+        MuninLog.Write("Munin started");
 
         _marshal = new Form { ShowInTaskbar = false };
         _ = _marshal.Handle; // force handle creation on the UI thread so Invoke works
@@ -142,6 +143,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         if (_quitting) return; // Created + Changed can both fire for one write
         _quitting = true;
+        MuninLog.Write("quit flag received");
         try { File.Delete(Paths.QuitFlagPath()); } catch { /* best effort */ }
         if (_meeting.IsRecording)
         {
@@ -163,6 +165,7 @@ internal sealed class TrayAppContext : ApplicationContext
             }
             catch (Exception ex)
             {
+                MuninLog.Write("model download failed", ex);
                 SetIcon(_iconOff);
                 SetStatus($"Model download failed: {ex.Message}");
                 ShowBalloon("Munin — model download failed", ex.Message);
@@ -293,6 +296,7 @@ internal sealed class TrayAppContext : ApplicationContext
         }
         catch (Exception ex)
         {
+            MuninLog.Write("meeting start failed", ex);
             _meetingActive = false;
             if (_enabled) _hook.Install();
             SetStatus($"Meeting start failed: {ex.Message}");
@@ -366,23 +370,28 @@ internal sealed class TrayAppContext : ApplicationContext
         int jobId = _panel.AddJob(cap.Stamp, cap.StartedLocal);
         var cts = new CancellationTokenSource();
         _jobCts[jobId] = cts;
+        var sw = Stopwatch.StartNew();
+        MuninLog.Write($"meeting {cap.Stamp}: processing started (me={FileSize(cap.MicPath)}, them={FileSize(cap.LoopPath)})");
         try
         {
             var r = await MeetingProcessor.TranscribeAsync(cap, _transcriber, cts.Token);
+            MuninLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
             if (_sendMeetings)
             {
                 _panel.SetJobStatus(jobId, "Filing to Odin…", JobTone.Busy, cancelable: true);
                 try
                 {
                     var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd"), cts.Token);
+                    MuninLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
                     if (!string.IsNullOrWhiteSpace(odin.Title)) _panel.SetJobTitle(jobId, odin.Title);
                     var sec = string.IsNullOrEmpty(odin.SecondaryType) ? "" : $" + {odin.SecondaryType}";
                     _panel.SetJobStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
                     ShowInfo("Munin — meeting filed to Odin", $"{odin.Classification} · {odin.TaskCount} task(s){sec}\n{odin.Title}");
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    MuninLog.Write($"meeting {cap.Stamp}: Odin filing failed", ex);
                     _panel.SetJobStatus(jobId, "Saved · Odin offline", JobTone.Warn, cancelable: false);
                     ShowBalloon("Munin — Odin not reachable", $"Saved the transcript to disk; file it later.\n{Path.GetFileName(r.TranscriptPath)}");
                     OpenInExplorer(r.TranscriptPath);
@@ -397,12 +406,14 @@ internal sealed class TrayAppContext : ApplicationContext
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
+            MuninLog.Write($"meeting {cap.Stamp}: cancelled by user after {sw.Elapsed:m\\:ss}");
             _panel.SetJobStatus(jobId, "Cancelled", JobTone.Muted, cancelable: false);
         }
         catch (Exception ex)
         {
-            _panel.SetJobStatus(jobId, "Failed", JobTone.Bad, cancelable: false);
-            ShowBalloon("Munin — meeting processing failed", ex.Message);
+            MuninLog.Write($"meeting {cap.Stamp}: FAILED after {sw.Elapsed:m\\:ss}", ex);
+            _panel.SetJobStatus(jobId, $"Failed · {ShortReason(ex)}", JobTone.Bad, cancelable: false);
+            ShowBalloon("Munin — meeting processing failed", $"{ex.Message}\nDetails: {Paths.LogPath()}");
         }
         finally
         {
@@ -410,6 +421,19 @@ internal sealed class TrayAppContext : ApplicationContext
             cts.Dispose();
             System.Threading.Interlocked.Decrement(ref _processingCount);
         }
+    }
+
+    private static string FileSize(string path)
+    {
+        try { return File.Exists(path) ? $"{new FileInfo(path).Length / 1048576.0:F1} MB" : "missing"; }
+        catch { return "?"; }
+    }
+
+    // One line for the panel row. No trailing "…": MeetingPanel.LoadRecent reads that as "still in flight".
+    private static string ShortReason(Exception ex)
+    {
+        var m = (string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message).Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return m.Length <= 90 ? m : m[..90];
     }
 
     private void Enable()
@@ -559,6 +583,7 @@ internal sealed class TrayAppContext : ApplicationContext
         }
         catch (Exception ex)
         {
+            MuninLog.Write("dictation failed", ex);
             SetStatus($"Error: {ex.Message}");
         }
         finally

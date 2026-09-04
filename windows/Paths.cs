@@ -27,4 +27,7 @@ internal static class Paths
 
     /// <summary>The %LOCALAPPDATA%\Munin folder itself (for watchers).</summary>
     public static string BaseDir() => Dir;
+
+    /// <summary>%LOCALAPPDATA%\Munin\munin.log: the append-only diagnostics log (<see cref="MuninLog"/>).</summary>
+    public static string LogPath() => Path.Combine(Dir, "munin.log");
 }

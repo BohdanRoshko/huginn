@@ -104,6 +104,11 @@ internal sealed class Transcriber : IAsyncDisposable
     /// Like <see cref="TranscribeAsync"/> but keeps each segment's start/end timestamps. The meeting
     /// recorder needs these to interleave the two tracks (Me / Them) chronologically and to anchor each
     /// action-item citation to a moment in the audio. Same model + gate as dictation.
+    ///
+    /// A long track is NOT fed to Whisper whole: the decoder can lock into a repetition loop for minutes.
+    /// The VAD splits it into speech chunks of at most 28 s (<see cref="SpeechChunker"/>), each transcribed on
+    /// its own, and <see cref="SpeechChunker.Tidy"/> collapses what still repeats. Without a usable VAD the
+    /// track goes through whole, as before.
     /// </summary>
     public async Task<IReadOnlyList<TranscriptSegment>> TranscribeSegmentsAsync(Stream wavStream, CancellationToken ct = default)
     {
@@ -111,22 +116,87 @@ internal sealed class Transcriber : IAsyncDisposable
         try
         {
             _factory ??= WhisperFactory.FromPath(_modelPath);
-            var builder = _factory.CreateBuilder().WithLanguage(Config.Language);
-            if (!string.IsNullOrEmpty(InitialPrompt)) builder = builder.WithPrompt(InitialPrompt);
-            await using var processor = builder.Build();
-
+            var chunks = await SpeechChunksAsync(wavStream, ct).ConfigureAwait(false);
             var segs = new List<TranscriptSegment>();
-            await foreach (var segment in processor.ProcessAsync(wavStream, ct).ConfigureAwait(false))
+            // ONE processor per track: each chunk is a standalone WAV slice fed to it (a processor per chunk
+            // would pay a whisper state, ~2 s of GPU setup, per chunk).
+            await using var processor = MeetingBuilder().Build();
+            if (chunks == null)
             {
-                var text = segment.Text.Trim();
-                if (text.Length > 0) segs.Add(new TranscriptSegment(segment.Start, segment.End, text));
+                wavStream.Position = 0;
+                await CollectAsync(processor, wavStream, TimeSpan.Zero, segs, ct).ConfigureAwait(false);
             }
-            return segs;
+            else if (wavStream is MemoryStream ms)
+            {
+                var bytes = WavSlice.Bytes(ms);
+                var (dataOffset, dataLength) = WavSlice.FindData(bytes);
+                foreach (var (start, end) in chunks)
+                {
+                    using var slice = WavSlice.Slice(bytes, dataOffset, dataLength, start, end);
+                    await CollectAsync(processor, slice, start, segs, ct).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                foreach (var (start, end) in chunks)
+                {
+                    wavStream.Position = 0;
+                    await using var chunkProcessor = MeetingBuilder().WithOffset(start).WithDuration(end - start).Build();
+                    await CollectAsync(chunkProcessor, wavStream, TimeSpan.Zero, segs, ct).ConfigureAwait(false);
+                }
+            }
+            var tidy = SpeechChunker.Tidy(segs);
+            MuninLog.Write($"transcribe: {(chunks == null ? "whole track" : $"{chunks.Count} speech chunks")}, {segs.Count} segments, {tidy.LoopsCollapsed} loop repeats collapsed, {tidy.OverlapsDropped} overlaps dropped");
+            return tidy.Segments;
         }
         finally
         {
             _gate.Release();
             _idleTimer.Change(TimeSpan.FromMinutes(Config.IdleUnloadMinutes), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private WhisperProcessorBuilder MeetingBuilder()
+    {
+        var builder = _factory!.CreateBuilder().WithLanguage(Config.Language);
+        if (!string.IsNullOrEmpty(InitialPrompt)) builder = builder.WithPrompt(InitialPrompt);
+        return builder;
+    }
+
+    private static async Task CollectAsync(WhisperProcessor processor, Stream wav, TimeSpan offset, List<TranscriptSegment> into, CancellationToken ct)
+    {
+        await foreach (var segment in processor.ProcessAsync(wav, ct).ConfigureAwait(false))
+        {
+            var text = segment.Text.Trim();
+            if (text.Length > 0) into.Add(new TranscriptSegment(segment.Start + offset, segment.End + offset, text));
+        }
+    }
+
+    /// <summary>Speech chunks for a meeting track, or null when the VAD is unavailable (then the whole track
+    /// is transcribed at once, the old behaviour). An empty list means the track holds no speech.</summary>
+    private async Task<List<(TimeSpan Start, TimeSpan End)>?> SpeechChunksAsync(Stream wavStream, CancellationToken ct)
+    {
+        try
+        {
+            await EnsureVadModelAsync(ct).ConfigureAwait(false);
+            _vadFactory ??= WhisperVadFactory.FromPath(_vadModelPath);
+            await using var vad = _vadFactory.CreateBuilder()
+                .WithThreshold(0.5f)
+                .WithUseGpu(false)
+                .WithMinSilenceDuration(TimeSpan.FromMilliseconds(400))
+                .WithMinSpeechDuration(TimeSpan.FromMilliseconds(200))
+                .WithMaxSpeechDuration(SpeechChunker.MaxChunk)
+                .WithSpeechPadding(TimeSpan.FromMilliseconds(250))
+                .Build();
+            wavStream.Position = 0;
+            var speech = await vad.DetectSpeechAsync(wavStream, ct).ConfigureAwait(false);
+            return SpeechChunker.Group(speech.Select(s => (s.Start, s.End)));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            MuninLog.Write("transcribe: VAD unavailable, transcribing the whole track", ex);
+            return null;
         }
     }
 

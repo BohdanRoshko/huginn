@@ -19,7 +19,9 @@ internal sealed class MuninSettings
     public bool ShowMeetingOverlay { get; set; } = false;
     public bool LivePreview { get; set; } = true;
     public bool PauseMediaWhileRecording { get; set; } = true;
-    public int IdleUnloadMinutes { get; set; } = 5;
+    public int IdleUnloadMinutes { get; set; } = 30;
+    public int MeetingThreads { get; set; } = 4; // CPU threads for meeting transcription; 0 = every hardware thread (the Whisper default)
+    public int MeetingRestPercent { get; set; } = 50; // after each speech chunk, rest this share of the time the chunk took; 0 = full speed
     public string OdinBaseUrl { get; set; } = "http://localhost:5180";
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };

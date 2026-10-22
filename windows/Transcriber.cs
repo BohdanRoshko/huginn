@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Whisper.net;
 using Whisper.net.Ggml;
@@ -29,10 +30,21 @@ internal sealed class Transcriber : IAsyncDisposable
     /// their spellings. Applied to both dictation and meeting transcription. Null/empty = no biasing.</summary>
     public string? InitialPrompt { get; set; }
 
-    /// <summary>When true, the idle timer will NOT unload the model — it stays warm in VRAM. Set while the app
-    /// is enabled so the (desktop-stalling) GPU load happens once at startup, never again on reload. VRAM is
-    /// still freed explicitly on Disable via <see cref="UnloadAsync"/>.</summary>
-    public bool KeepWarm { get; set; }
+    /// <summary>When true, the idle timer will NOT unload the model. Set while a meeting records, so the model
+    /// loaded at Record is still there at Stop.</summary>
+    public bool KeepWarm
+    {
+        get => _keepWarm;
+        set
+        {
+            _keepWarm = value;
+            // A meeting can outlast the countdown, and a discarded one never transcribes; start a fresh one.
+            if (!value) _idleTimer.Change(TimeSpan.FromMinutes(Config.IdleUnloadMinutes), Timeout.InfiniteTimeSpan);
+        }
+    }
+    private volatile bool _keepWarm;
+
+    private Task? _loading;
 
     public Transcriber(string modelPath, string vadModelPath, string previewModelPath)
     {
@@ -43,6 +55,16 @@ internal sealed class Transcriber : IAsyncDisposable
     }
 
     public bool IsLoaded => _factory != null;
+
+    /// <summary>Starts the warm-up load unless the model is loaded or already loading. Called at Record and on
+    /// the dictation key, so the load runs while the user speaks.</summary>
+    public Task EnsureLoadedAsync()
+    {
+        if (IsLoaded) return Task.CompletedTask;
+        var t = _loading;
+        if (t != null && !t.IsCompleted) return t;
+        return _loading = WarmupAsync();
+    }
 
     /// <summary>
     /// Loads the model and runs one throwaway pass on silence so the GPU shaders compile now,
@@ -132,17 +154,21 @@ internal sealed class Transcriber : IAsyncDisposable
                 var (dataOffset, dataLength) = WavSlice.FindData(bytes);
                 foreach (var (start, end) in chunks)
                 {
+                    var work = Stopwatch.StartNew();
                     using var slice = WavSlice.Slice(bytes, dataOffset, dataLength, start, end);
                     await CollectAsync(processor, slice, start, segs, ct).ConfigureAwait(false);
+                    await RestAsync(work.Elapsed, ct).ConfigureAwait(false);
                 }
             }
             else
             {
                 foreach (var (start, end) in chunks)
                 {
+                    var work = Stopwatch.StartNew();
                     wavStream.Position = 0;
                     await using var chunkProcessor = MeetingBuilder().WithOffset(start).WithDuration(end - start).Build();
                     await CollectAsync(chunkProcessor, wavStream, TimeSpan.Zero, segs, ct).ConfigureAwait(false);
+                    await RestAsync(work.Elapsed, ct).ConfigureAwait(false);
                 }
             }
             var tidy = SpeechChunker.Tidy(segs);
@@ -159,9 +185,14 @@ internal sealed class Transcriber : IAsyncDisposable
     private WhisperProcessorBuilder MeetingBuilder()
     {
         var builder = _factory!.CreateBuilder().WithLanguage(Config.Language);
+        if (Config.MeetingThreads > 0) builder = builder.WithThreads(Config.MeetingThreads);
         if (!string.IsNullOrEmpty(InitialPrompt)) builder = builder.WithPrompt(InitialPrompt);
         return builder;
     }
+
+    // Gives the GPU and CPU back to the desktop between chunks, so a video does not stall during a long job.
+    private static Task RestAsync(TimeSpan work, CancellationToken ct) =>
+        Config.MeetingRestPercent > 0 ? Task.Delay(work * (Config.MeetingRestPercent / 100.0), ct) : Task.CompletedTask;
 
     private static async Task CollectAsync(WhisperProcessor processor, Stream wav, TimeSpan offset, List<TranscriptSegment> into, CancellationToken ct)
     {

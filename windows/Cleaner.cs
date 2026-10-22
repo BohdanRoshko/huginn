@@ -8,8 +8,8 @@ namespace Munin;
 /// <summary>
 /// Optional in-process cleanup LLM (Qwen2.5-3B via LLamaSharp + Vulkan). Tidies raw dictation —
 /// punctuation, capitalization, filler/word-repeat removal — without changing the wording.
-/// Runs INSIDE Munin's process, so it dies with the app; also explicitly unloaded when cleanup is
-/// toggled off or recording is disabled, to free VRAM. Passes text through unchanged if not ready.
+/// Runs INSIDE Munin's process, so it dies with the app; also unloaded when cleanup is toggled off, when
+/// recording is disabled, or after Config.IdleUnloadMinutes without use. Passes text through unchanged if not ready.
 /// </summary>
 internal sealed class Cleaner : IAsyncDisposable
 {
@@ -38,7 +38,16 @@ internal sealed class Cleaner : IAsyncDisposable
     /// is told to fix phonetically-close words to these exact spellings. Set before cleanup runs.</summary>
     public string? Vocabulary { get; set; }
 
-    public Cleaner(string modelPath) => _modelPath = modelPath;
+    private readonly System.Threading.Timer _idleTimer;
+
+    public Cleaner(string modelPath)
+    {
+        _modelPath = modelPath;
+        _idleTimer = new System.Threading.Timer(_ => _ = UnloadAsync(), null, Timeout.Infinite, Timeout.Infinite);
+    }
+
+    private void RestartIdleTimer() =>
+        _idleTimer.Change(TimeSpan.FromMinutes(Config.IdleUnloadMinutes), Timeout.InfiniteTimeSpan);
 
     public async Task PrepareAsync()
     {
@@ -71,7 +80,11 @@ internal sealed class Cleaner : IAsyncDisposable
         {
             Status?.Invoke($"Cleanup model failed: {ex.Message}");
         }
-        finally { _gate.Release(); }
+        finally
+        {
+            _gate.Release();
+            RestartIdleTimer();
+        }
     }
 
     private string BuildSystemPrompt()
@@ -134,7 +147,11 @@ internal sealed class Cleaner : IAsyncDisposable
             return cleaned;
         }
         catch { return raw; } // never lose the user's words to a cleanup failure
-        finally { _gate.Release(); }
+        finally
+        {
+            _gate.Release();
+            RestartIdleTimer();
+        }
     }
 
     public async Task UnloadAsync()
@@ -152,6 +169,7 @@ internal sealed class Cleaner : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        await _idleTimer.DisposeAsync().ConfigureAwait(false);
         await UnloadAsync().ConfigureAwait(false);
         _gate.Dispose();
     }

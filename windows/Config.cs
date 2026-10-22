@@ -37,6 +37,10 @@ internal static class Config
     // Unload the model from VRAM after this many minutes of no dictation.
     public static int IdleUnloadMinutes => S.IdleUnloadMinutes;
 
+    // Meeting transcription load: CPU threads (0 = all) and the rest after each chunk, as a % of its work time.
+    public static int MeetingThreads => S.MeetingThreads;
+    public static int MeetingRestPercent => S.MeetingRestPercent;
+
     // Whisper language. "en" is fastest/most reliable; "auto" to auto-detect, or a code like "uk"/"es".
     public static string Language => S.Language;
 

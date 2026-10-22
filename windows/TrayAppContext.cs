@@ -332,6 +332,8 @@ internal sealed class TrayAppContext : ApplicationContext
             return;
         }
         _meetingActive = true;
+        _transcriber.KeepWarm = true; // load now, so Stop finds the model in VRAM
+        _ = _transcriber.EnsureLoadedAsync();
         if (_enabled) _hook.Uninstall(); // free the mic + keys for the call; dictation pauses while recording
         _meeting.MicDeviceNumber = _recorder.DeviceNumber;
         try
@@ -342,6 +344,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             MuninLog.Write("meeting start failed", ex);
             _meetingActive = false;
+            _transcriber.KeepWarm = false;
             if (_enabled) _hook.Install();
             SetStatus($"Meeting start failed: {ex.Message}");
             ShowBalloon("Munin — meeting recording failed", ex.Message);
@@ -372,6 +375,7 @@ internal sealed class TrayAppContext : ApplicationContext
         var cap = await _meeting.FinalizeAsync();   // fast: flush the WAV writers, free the recorder
 
         _meetingActive = false;
+        _transcriber.KeepWarm = false;
         if (_enabled) { _hook.Install(); SetIcon(_iconIdle); }
         else SetIcon(_iconOff);
         _meetingItem.Enabled = true;
@@ -431,6 +435,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private async Task ProcessCaptureAsync(MeetingCapture cap)
     {
         System.Threading.Interlocked.Increment(ref _processingCount);
+        UpdatePriority();
         int jobId = _panel.AddJob(cap.Stamp, cap.StartedLocal);
         var cts = new CancellationTokenSource();
         _jobCts[jobId] = cts;
@@ -494,6 +499,7 @@ internal sealed class TrayAppContext : ApplicationContext
             _jobCts.TryRemove(jobId, out _);
             cts.Dispose();
             System.Threading.Interlocked.Decrement(ref _processingCount);
+            UpdatePriority();
         }
     }
 
@@ -518,37 +524,37 @@ internal sealed class TrayAppContext : ApplicationContext
         _toggleItem.Checked = true;
         SetIcon(_iconIdle);
         SetStatus("Idle");
-        _transcriber.KeepWarm = true; // stay loaded while enabled → the GPU-load freeze happens once, not on every reload
-        _ = WarmupAsync();
-        // The cleanup (Qwen) model is NOT preloaded here — it loads lazily on first use (Cleaner.CleanAsync) so it
-        // doesn't pile onto the startup GPU load. Once loaded it stays warm until disabled / toggled off.
+        // Nothing loads here. The models load on the dictation key or at Record, and leave VRAM after
+        // Config.IdleUnloadMinutes without use.
     }
 
-    private async Task WarmupAsync()
+    // Loads the speech models while the user speaks, then the cleanup LLM (staggered, so the two GPU loads do
+    // not pile into one long stall). The lazy loads in TranscribeAsync and Cleaner.CleanAsync stay as a safety net.
+    private async Task PreloadForDictationAsync()
     {
-        SetStatus("Warming up GPU…");
-        try { await _transcriber.WarmupAsync(); }
+        try { await _transcriber.EnsureLoadedAsync(); }
         catch { /* falls back to a cold first transcription */ }
-        // Warm the cleanup LLM AFTER the speech models (staggered — so the two GPU loads don't pile into one
-        // long stall). Only when cleanup is on. Removes the one-time ~3–5 s Qwen-load hit on the first cleaned
-        // dictation of the session. The lazy-load in Cleaner.CleanAsync stays as a safety net.
         if (_cleanupEnabled)
         {
-            SetStatus("Warming up cleanup…");
             try { await _cleaner.PrepareAsync(); }
             catch { /* falls back to a lazy first-use load */ }
         }
-        if (_enabled && !_recorder.IsRecording)
+    }
+
+    // A meeting job runs below normal priority, so the desktop and a video keep the CPU first.
+    private void UpdatePriority()
+    {
+        try
         {
-            SetIcon(_iconIdle);
-            SetStatus("Idle — ready");
+            Process.GetCurrentProcess().PriorityClass =
+                _processingCount > 0 ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal;
         }
+        catch { /* priority is a nicety */ }
     }
 
     private void Disable()
     {
         _enabled = false;
-        _transcriber.KeepWarm = false; // allow VRAM to be freed now that we're disabling
         _hook.Uninstall();
         if (_recorder.IsRecording) _recorder.Stop();
         if (!_meetingActive && _processingCount == 0) _ = _transcriber.UnloadAsync(); // free VRAM (not mid-meeting/processing)
@@ -569,6 +575,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _overlay?.ShowStarting();
         _ = _media?.PauseAllAsync();
         _recorder.Start();
+        _ = PreloadForDictationAsync();
     }
 
     private void OnTalkUp()

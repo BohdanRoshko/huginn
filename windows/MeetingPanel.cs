@@ -43,6 +43,9 @@ internal sealed class MeetingPanel : Form
     private bool _dragMoved;
     private Point _dragOrigin;
     private int _hoverCancelId = -1;
+    private int _hoverCopyId = -1;
+    private int _copiedId = -1;             // the row whose path was just copied: its icon shows a check briefly
+    private DateTime _copiedAt;
     private TextBox? _editor;              // inline rename box over a row's name line
     private int _editingId = -1;
     private ContextMenuStrip? _rowMenu;
@@ -212,6 +215,7 @@ internal sealed class MeetingPanel : Form
         _incoming *= 0.55f;
         // A first trash click ARMS the discard; it disarms itself after a few seconds un-confirmed.
         if (_discardArmed && (DateTime.Now - _discardArmedAt).TotalSeconds > 3.5) { _discardArmed = false; Invalidate(); }
+        if (_copiedId != -1 && (DateTime.Now - _copiedAt).TotalSeconds > 1.4) { _copiedId = -1; Invalidate(); }
         if (_recording || _wave.Any(v => v > 0.01f)) Invalidate();
     }
 
@@ -341,7 +345,8 @@ internal sealed class MeetingPanel : Form
             g.FillEllipse(d, 19, top + 15, 7, 7);
 
         bool cancelable = entry.Cancelable;
-        int rightPad = cancelable ? 40 : 16;
+        bool copyable = CanCopy(entry);
+        int rightPad = cancelable || copyable ? 40 : 16;
         int nameW = Width - 34 - rightPad;
 
         // Line 1 = the meeting NAME (Odin note title) once known; the live status before that.
@@ -356,6 +361,51 @@ internal sealed class MeetingPanel : Form
             TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
         if (cancelable) DrawCancel(g, CancelRect(i), entry.Id == _hoverCancelId);
+        else if (copyable) DrawCopy(g, CancelRect(i), entry.Id == _hoverCopyId, entry.Id == _copiedId);
+    }
+
+    // A finished row with a transcript gets the copy-path button where an in-flight row has its ✕.
+    private static bool CanCopy(Entry e) => !e.Cancelable && e.Transcript != null;
+
+    // The copy icon: two overlapping rounded squares. Right after a copy it shows a check instead.
+    private void DrawCopy(Graphics g, Rectangle hit, bool hover, bool copied)
+    {
+        if (hover)
+        {
+            using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
+            using var hp = Rounded(hit, 6);
+            g.FillPath(hb, hp);
+        }
+        int cx = hit.X + hit.Width / 2, cy = hit.Y + hit.Height / 2;
+        if (copied)
+        {
+            using var ok = new Pen(Green, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+            g.DrawLines(ok, new[] { new Point(cx - 4, cy), new Point(cx - 1, cy + 3), new Point(cx + 4, cy - 3) });
+            return;
+        }
+        using var pen = new Pen(hover ? TitleCol : Muted, 1.3f);
+        using (var back = Rounded(new RectangleF(cx - 2.5f, cy - 5.5f, 8, 8), 1.8f)) g.DrawPath(pen, back);
+        using (var fill = new SolidBrush(Bg))
+        using (var front = Rounded(new RectangleF(cx - 5.5f, cy - 2.5f, 8, 8), 1.8f))
+        {
+            g.FillPath(fill, front); // hides the back square's corner behind the front one
+            if (hover) { using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255)); g.FillPath(hb, front); }
+            g.DrawPath(pen, front);
+        }
+    }
+
+    private void CopyPath(Entry entry)
+    {
+        var path = ResolveTranscript(entry);
+        if (!File.Exists(path)) return;
+        try
+        {
+            Clipboard.SetText(path);
+            _copiedId = entry.Id;
+            _copiedAt = DateTime.Now;
+            Invalidate();
+        }
+        catch { /* clipboard busy; the user can click again */ }
     }
 
     // An empty slot's skeleton: a muted dot + two rounded "loading" bars (name + meta line), widths lightly
@@ -447,6 +497,11 @@ internal sealed class MeetingPanel : Form
                 CancelRequested?.Invoke(_entries[i].Id);
                 return;
             }
+            if (CanCopy(_entries[i]) && CancelRect(i).Contains(e.Location))
+            {
+                CopyPath(_entries[i]);
+                return;
+            }
         }
         _dragging = true;
         _dragMoved = false;
@@ -470,6 +525,11 @@ internal sealed class MeetingPanel : Form
         for (int i = 0; i < _entries.Count; i++)
             if (_entries[i].Cancelable && CancelRect(i).Contains(e.Location)) { hover = _entries[i].Id; break; }
         if (hover != _hoverCancelId) { _hoverCancelId = hover; Invalidate(); }
+
+        int copyHover = -1;
+        for (int i = 0; i < _entries.Count; i++)
+            if (CanCopy(_entries[i]) && CancelRect(i).Contains(e.Location)) { copyHover = _entries[i].Id; break; }
+        if (copyHover != _hoverCopyId) { _hoverCopyId = copyHover; Cursor = copyHover == -1 ? Cursors.Default : Cursors.Hand; Invalidate(); }
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -491,10 +551,12 @@ internal sealed class MeetingPanel : Form
     {
         base.OnMouseLeave(e);
         if (_dragging) return;
-        bool changed = _btnHover || _discardHover || _hoverCancelId != -1;
+        bool changed = _btnHover || _discardHover || _hoverCancelId != -1 || _hoverCopyId != -1;
         _btnHover = false;
         _discardHover = false;
         _hoverCancelId = -1;
+        _hoverCopyId = -1;
+        Cursor = Cursors.Default;
         if (changed) Invalidate();
     }
 

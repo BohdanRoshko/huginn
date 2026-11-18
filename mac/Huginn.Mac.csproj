@@ -24,6 +24,9 @@
     <!-- The core reads JSON by reflection; trimming would cut what it needs. -->
     <LinkMode>None</LinkMode>
     <NoWarn>$(NoWarn);CA1422;CA1416</NoWarn>
+    <!-- Whisper.net also carries "__Internal" P/Invokes for iOS. Without dlsym the SDK asks the linker for each of
+         those symbols and the link fails; on the Mac Whisper.net opens libwhisper itself, so look them up lazily. -->
+    <MtouchExtraArgs>--dlsym:true</MtouchExtraArgs>
   </PropertyGroup>
 
   <ItemGroup>

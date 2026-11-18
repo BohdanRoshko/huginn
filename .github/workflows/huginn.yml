@@ -57,6 +57,10 @@ jobs:
       - name: Test the core
         run: dotnet test tests/Huginn.Core.Tests -c Release
 
+      - name: Show the SDK's dlsym switches
+        continue-on-error: true
+        run: grep -rhoE "[A-Za-z_]*[Dd]lsym[A-Za-z_]*" "$HOME"/.dotnet/packs/Microsoft.macOS.Sdk.net10.0_26.0/*/targets | sort | uniq -c
+
       - name: Build the Mac app
         run: dotnet build mac/Huginn.Mac.csproj -c Release
 

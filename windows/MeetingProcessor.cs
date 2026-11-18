@@ -56,17 +56,22 @@ internal static class MeetingProcessor
             all.Add((me[i].Start, "Me", me[i].Text));
             if (!verdict.Drop[i]) kept.Add((me[i].Start, "Me", me[i].Text));
         }
+        var themEnds = new Dictionary<(TimeSpan, string), TimeSpan>();
         foreach (var s in them)
         {
             all.Add((s.Start, "Them", s.Text));
             kept.Add((s.Start, "Them", s.Text));
+            themEnds[(s.Start, s.Text)] = s.End;
         }
         all.Sort((a, b) => a.start.CompareTo(b.start));
         kept.Sort((a, b) => a.start.CompareTo(b.start));
 
         var rawText = Format(all, cap.StartedLocal);
         var reconciled = TranscriptReconciler.DeEcho(Format(kept, cap.StartedLocal));
-        var text = reconciled.Text;
+        // De-echo needs the Me/Them labels, so the names from Kumospace go on after it.
+        var timeline = SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp));
+        var text = timeline == null ? reconciled.Text
+            : NameSpeakers(reconciled.Text, kept.Where(k => k.speaker == "Them").Select(k => (k.start, themEnds.GetValueOrDefault((k.start, k.text), k.start))).ToList(), timeline, cap.Stamp);
         var echo = new EchoReport(me.Count, verdict.Silent, verdict.Echo, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagConfidence);
 
         var transcriptPath = TranscriptPathFor(cap.Stamp, null);
@@ -135,6 +140,47 @@ internal static class MeetingProcessor
         foreach (var (start, speaker, line) in segs)
             sb.AppendLine($"[{(int)start.TotalHours:D2}:{start.Minutes:D2}:{start.Seconds:D2}] {speaker}: {line}");
         return sb.ToString();
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ThemLine =
+        new(@"^(\s*\[\d{1,2}:\d{2}:\d{2}\]\s*)Them(\s*:)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Replaces each "Them" line's label with the person Kumospace heard talking at that time. The text pass
+    /// removes only "Me" lines, so the n-th "Them" line of <paramref name="text"/> is the n-th of <paramref name="themSpans"/>.
+    /// A line with no clear speaker stays "Them". The header names the rooms and the people.</summary>
+    internal static string NameSpeakers(string text, List<(TimeSpan start, TimeSpan end)> themSpans, SpeakerTimeline tl, string stamp)
+    {
+        var talk = MuninSettings.Current.KumoTalkLevel;
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        int themCount = lines.Count(l => ThemLine.IsMatch(l));
+        if (themCount != themSpans.Count)
+        {
+            MuninLog.Write($"meeting {stamp}: speaker names skipped ({themCount} Them lines vs {themSpans.Count} segments)");
+            return text;
+        }
+        int k = 0, named = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var m = ThemLine.Match(lines[i]);
+            if (!m.Success) continue;
+            var (s, e) = themSpans[k++];
+            var who = tl.SpeakerFor(s, e, talk);
+            if (who == null) continue;
+            lines[i] = m.Groups[1].Value + who + lines[i][m.Groups[2].Index..];
+            named++;
+        }
+        MuninLog.Write($"meeting {stamp}: speakers: named {named} of {themCount} Them lines; {tl.Describe()}");
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (!lines[i].StartsWith("# Tracks:")) continue;
+            var where = tl.Rooms.Count > 0 ? string.Join(", ", tl.Rooms) : "outside a room";
+            var people = tl.People.Count > 0 ? string.Join(", ", tl.People) : "nobody recorded";
+            lines[i] = $"# Kumospace: {where} · with {people}\n"
+                     + $"# Speakers: Me = {tl.Me ?? "the microphone"}. A named line is the person Kumospace heard talking then. \"Them\" = no clear speaker.";
+            break;
+        }
+        return string.Join("\n", lines);
     }
 
     private static bool HasAudio(string path)

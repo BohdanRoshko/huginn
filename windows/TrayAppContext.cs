@@ -43,6 +43,19 @@ internal sealed class TrayAppContext : ApplicationContext
     private const int PreviewWindowSeconds = 10; // live preview transcribes only the last N seconds → constant cost
     private bool _cleanupEnabled;
     private ToolStripMenuItem _cleanupItem = null!;
+    // Kumospace: the watcher reads the app once a second; the detector turns that into start/stop; the timeline
+    // keeps who was talking during the current recording (names the "Them" lines later).
+    private readonly KumoWatcher _kumo;
+    private readonly KumoMeetingDetector _detector;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<KumoSnapshot> _kumoReads = new();
+    private readonly System.Windows.Forms.Timer _kumoTimer = new() { Interval = 1000 };
+    private SpeakerTimeline? _timeline;
+    private KumoSnapshot? _lastKumoRead;
+    private string? _lastCompanyLogged;
+    private bool _kumoAuto;
+    private bool _kumoRestartHinted;
+    private ToolStripMenuItem _kumoAutoItem = null!;
+    private ToolStripMenuItem _kumoStatusItem = null!;
     private readonly string _modelPath;
 
     private readonly Icon _iconIdle;
@@ -82,14 +95,14 @@ internal sealed class TrayAppContext : ApplicationContext
         _panel = new MeetingPanel();
         _panel.RecordToggleRequested += ToggleMeeting;
         _panel.CancelRequested += CancelJob;
-        _panel.DiscardRequested += () => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); };
+        _panel.DiscardRequested += () => UserDiscard();
         _meeting.LevelChanged += _panel.SetLevel;
         // The notepad: the recorder's controls, beside it. Settings.NotesMode says when it shows — "always"
         // (paired with the recorder's show/hide), "record" (opens when a recording starts), or "off".
         _notesMode = Settings.NotesMode;
         _notes = new NotesPanel();
         _notes.RecordToggleRequested += ToggleMeeting;
-        _notes.DiscardRequested += () => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); };
+        _notes.DiscardRequested += () => UserDiscard();
         _notes.NotesChanged += SaveNotes;
         _notes.TranscriptResolver = _panel.TranscriptPathFor;
         _notes.HideRequested += () => { if (_notesMode == "always") _panel.HidePanel(); else _notes.HidePanel(); };
@@ -100,6 +113,19 @@ internal sealed class TrayAppContext : ApplicationContext
             if (_notesMode != "always") return;
             if (_panel.Visible) _notes.ShowPanel(); else _notes.HidePanel();
         };
+        var ms = MuninSettings.Current;
+        _kumo = new KumoWatcher(ms.KumoDebugPort);
+        _detector = new KumoMeetingDetector
+        {
+            TalkLevel = ms.KumoTalkLevel,
+            StartSpeechSeconds = ms.KumoStartSpeechSeconds,
+            AloneStopSeconds = ms.KumoAloneStopSeconds,
+            QuietStopSeconds = ms.KumoQuietStopSeconds,
+        };
+        _kumo.Snapshot += snap => _kumoReads.Enqueue(snap);
+        _kumo.StatusChanged += s => OnUi(() => OnKumoStatus(s));
+        _kumoTimer.Tick += OnKumoTick;
+        _kumoAuto = Settings.KumoAutoRecord;
         _sendMeetings = Settings.SendMeetingsToOdin;
         _panelVisible = Settings.MeetingPanelVisible;
         _cleanupEnabled = Settings.CleanupEnabled;
@@ -133,6 +159,14 @@ internal sealed class TrayAppContext : ApplicationContext
         if (_panelVisible) _panel.ShowPanel();
 
         StartQuitWatcher();
+
+        if (KumoLauncher.IsInstalled)
+        {
+            KumoLauncher.EnsureShortcuts(ms.KumoDebugPort);
+            _kumo.Start();
+            _kumoTimer.Start();
+        }
+        else _kumoStatusItem.Text = "Kumospace: not installed";
 
         _ = InitializeAsync();
     }
@@ -168,7 +202,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             SaveNotes();
             _meeting.Stop();
-            await _meeting.FinalizeAsync(); // flush the WAV writers — the recording survives on disk unprocessed
+            SaveTimeline(await _meeting.FinalizeAsync()); // flush the WAV writers — the recording survives on disk unprocessed
         }
         Quit();
     }
@@ -212,10 +246,14 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         _meetingItem = new ToolStripMenuItem("Start meeting recording", null, (_, _) => ToggleMeeting());
         menu.Items.Add(_meetingItem);
-        _discardItem = new ToolStripMenuItem("Stop && discard recording", null, (_, _) => { if (_meeting.IsRecording) _ = DiscardMeetingAsync(); }) { Enabled = false };
+        _discardItem = new ToolStripMenuItem("Stop && discard recording", null, (_, _) => UserDiscard()) { Enabled = false };
         menu.Items.Add(_discardItem);
         _sendMeetingsItem = new ToolStripMenuItem("Auto-file meetings to Odin", null, (_, _) => ToggleSendMeetings()) { Checked = _sendMeetings };
         menu.Items.Add(_sendMeetingsItem);
+        _kumoAutoItem = new ToolStripMenuItem("Auto-record Kumospace meetings", null, (_, _) => ToggleKumoAuto()) { Checked = _kumoAuto };
+        menu.Items.Add(_kumoAutoItem);
+        _kumoStatusItem = new ToolStripMenuItem("Kumospace: starting…", null, (_, _) => _ = RestartKumoAsync()) { Enabled = false };
+        menu.Items.Add(_kumoStatusItem);
         _panelItem = new ToolStripMenuItem("Show recorder panel", null, (_, _) => TogglePanel()) { Checked = _panelVisible };
         menu.Items.Add(_panelItem);
         var notesMenu = new ToolStripMenuItem("Notes window");
@@ -286,8 +324,124 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private void ToggleMeeting()
     {
-        if (_meeting.IsRecording) _ = StopMeetingAsync();
+        if (_meeting.IsRecording) { _detector.OnUserEnded(); _ = StopMeetingAsync(); }
         else StartMeeting();
+    }
+
+    private void UserDiscard()
+    {
+        if (!_meeting.IsRecording) return;
+        _detector.OnUserEnded();
+        _ = DiscardMeetingAsync();
+    }
+
+    // ---- Kumospace auto-record ----
+
+    private void ToggleKumoAuto()
+    {
+        _kumoAuto = !_kumoAuto;
+        _kumoAutoItem.Checked = _kumoAuto;
+        Settings.KumoAutoRecord = _kumoAuto;
+        if (_kumo.Status == KumoStatus.NoDebugPort) OnKumoStatus(_kumo.Status);
+    }
+
+    private void OnKumoStatus(KumoStatus s)
+    {
+        _kumoStatusItem.Enabled = s == KumoStatus.NoDebugPort;
+        _kumoStatusItem.Text = s switch
+        {
+            KumoStatus.Watching => KumoWatchingText(),
+            KumoStatus.NotInSpace => "Kumospace: open, not in a space",
+            KumoStatus.NotRunning => "Kumospace: not running",
+            KumoStatus.NoDebugPort => "Kumospace: restart it so Munin can follow meetings",
+            _ => "Kumospace: off",
+        };
+        if (s == KumoStatus.NoDebugPort && _kumoAuto && !_kumoRestartHinted)
+        {
+            _kumoRestartHinted = true;
+            ShowInfo("Munin — Kumospace needs a restart",
+                "It was started without the port Munin reads. Tray → \"Kumospace: restart it…\" restarts it (you leave your room for a few seconds).");
+        }
+    }
+
+    private string KumoWatchingText()
+    {
+        var zone = _kumo.Zone.Length > 0 ? _kumo.Zone : "outside a room";
+        var with = _lastKumoRead?.Company.Count ?? 0;
+        return with == 0 ? $"Kumospace: watching · {zone}" : $"Kumospace: watching · {zone} · with {with}";
+    }
+
+    private async Task RestartKumoAsync()
+    {
+        if (_meeting.IsRecording) { ShowBalloon("Munin — not now", "Stop the recording before restarting Kumospace."); return; }
+        _kumoStatusItem.Enabled = false;
+        _kumoStatusItem.Text = "Kumospace: restarting…";
+        if (!await KumoLauncher.RestartWithDebugPortAsync(MuninSettings.Current.KumoDebugPort))
+        {
+            ShowBalloon("Munin — Kumospace did not close", "Close Kumospace yourself; its shortcuts now start it the right way.");
+            OnKumoStatus(_kumo.Status);
+        }
+    }
+
+    // Once a second, on the UI thread: take the watcher's reads, add them to the current recording's speaker
+    // timeline, and let the detector start or stop a recording.
+    private void OnKumoTick(object? sender, EventArgs e)
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        bool any = false;
+        while (_kumoReads.TryDequeue(out var snap)) { any = true; HandleKumoRead(now, snap); }
+        if (!any) HandleKumoRead(now, null);
+    }
+
+    private void HandleKumoRead(long now, KumoSnapshot? snap)
+    {
+        if (snap != null)
+        {
+            var before = _lastKumoRead?.Company.Count ?? 0;
+            _lastKumoRead = snap;
+            // Who I am with, logged on each change, so a late or missed start can be traced afterwards.
+            var with = snap.InCall ? string.Join(", ", snap.Company.Select(p => p.Name).OrderBy(n => n)) : "";
+            if (with != _lastCompanyLogged)
+            {
+                _lastCompanyLogged = with;
+                MuninLog.Write(with.Length == 0 ? "kumo: alone" : $"kumo: with {with} ({(snap.Zone is { Length: > 0 } zn ? zn : "outside a room")})");
+            }
+            if (_kumo.Status == KumoStatus.Watching && snap.Company.Count != before) _kumoStatusItem.Text = KumoWatchingText();
+            if (_meeting.IsRecording) _timeline?.Add(snap);
+        }
+        var (action, reason) = _detector.Tick(now, snap, _meeting.IsRecording);
+        if (!_kumoAuto) return;
+        if (action == KumoAction.Start && !_meeting.IsRecording)
+        {
+            StartMeeting();
+            if (!_meeting.IsRecording) return;
+            _detector.OnAutoStarted(now);
+            var zone = snap?.Zone is { Length: > 0 } z ? z : "outside a room";
+            var people = string.Join(", ", snap?.Company.Select(p => p.Name) ?? Array.Empty<string>());
+            MuninLog.Write($"kumo: auto start ({reason}), {zone}, with {people}");
+            ShowInfo("Munin — recording a Kumospace meeting", $"{zone} · with {people}");
+        }
+        else if (action == KumoAction.Stop && _meeting.IsRecording)
+        {
+            _ = StopAutoMeetingAsync(reason);
+        }
+    }
+
+    private async Task StopAutoMeetingAsync(string reason)
+    {
+        var speech = _detector.SpeechSecondsThisRecording;
+        _detector.OnAutoStopped();
+        MuninLog.Write($"kumo: auto stop ({reason}), {speech:F0} s of speech");
+        if (speech < MuninSettings.Current.KumoMinSpeechSeconds)
+        {
+            var cap = await EndMeetingAsync();
+            DeleteCapture(cap);
+            _notes.Discarded();
+            SetStatus("Short chat not kept");
+            ShowInfo("Munin — short chat not kept", $"Only {speech:F0} s of talk, so the recording was deleted.");
+            return;
+        }
+        await StopMeetingAsync();
     }
 
     private void ToggleSendMeetings()
@@ -350,6 +504,7 @@ internal sealed class TrayAppContext : ApplicationContext
             ShowBalloon("Munin — meeting recording failed", ex.Message);
             return;
         }
+        _timeline = SpeakerTimeline.Begin(_meeting.StartedLocal);
         _meetingItem.Text = "Stop meeting recording";
         _discardItem.Enabled = true;
         SetIcon(_iconRec);
@@ -373,6 +528,7 @@ internal sealed class TrayAppContext : ApplicationContext
         SaveNotes(); // the last edits, before the recorder stops accepting them
         _meeting.Stop();
         var cap = await _meeting.FinalizeAsync();   // fast: flush the WAV writers, free the recorder
+        SaveTimeline(cap);
 
         _meetingActive = false;
         _transcriber.KeepWarm = false;
@@ -399,15 +555,28 @@ internal sealed class TrayAppContext : ApplicationContext
     private async Task DiscardMeetingAsync()
     {
         var cap = await EndMeetingAsync();
-        if (cap != null)
-        {
-            try { if (File.Exists(cap.MicPath)) File.Delete(cap.MicPath); } catch { /* best effort */ }
-            try { if (File.Exists(cap.LoopPath)) File.Delete(cap.LoopPath); } catch { /* best effort */ }
-            try { if (File.Exists(cap.NotesPath)) File.Delete(cap.NotesPath); } catch { /* best effort */ }
-        }
+        DeleteCapture(cap);
         _notes.Discarded();
         SetStatus("Recording discarded");
         ShowInfo("Munin — recording discarded", "The meeting audio was deleted; nothing was transcribed or filed.");
+    }
+
+    private static void DeleteCapture(MeetingCapture? cap)
+    {
+        if (cap == null) return;
+        foreach (var path in new[] { cap.MicPath, cap.LoopPath, cap.NotesPath, SpeakerTimeline.PathFor(cap.Stamp) })
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
+        }
+    }
+
+    // Who Kumospace heard during the recording goes next to its WAVs, for the transcript step to name the speakers.
+    private void SaveTimeline(MeetingCapture? cap)
+    {
+        var tl = _timeline;
+        _timeline = null;
+        if (cap == null || tl == null || (tl.Rooms.Count == 0 && tl.People.Count == 0 && tl.Remote.Count == 0)) return;
+        tl.Save(SpeakerTimeline.PathFor(cap.Stamp));
     }
 
     // The pad changed (debounced) or the recording is ending: rewrite the meeting's notes file from the pad, so a
@@ -762,6 +931,8 @@ internal sealed class TrayAppContext : ApplicationContext
         if (disposing)
         {
             _quitWatcher?.Dispose();
+            _kumoTimer.Dispose();
+            _kumo.Dispose();
             _hook.Dispose();
             _previewTimer?.Dispose();
             _recorder.Dispose();

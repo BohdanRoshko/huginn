@@ -23,6 +23,13 @@ internal sealed class MuninSettings
     public int MeetingThreads { get; set; } = 4; // CPU threads for meeting transcription; 0 = every hardware thread (the Whisper default)
     public int MeetingRestPercent { get; set; } = 50; // after each speech chunk, rest this share of the time the chunk took; 0 = full speed
     public string OdinBaseUrl { get; set; } = "http://localhost:5180";
+    // Kumospace auto-record (KumoWatcher / KumoMeetingDetector). Levels are Daily's 0..1 audio level.
+    public int KumoDebugPort { get; set; } = 9222;          // the DevTools port Kumospace is started with
+    public double KumoTalkLevel { get; set; } = 0.03;       // a level at or above this counts as talking
+    public double KumoStartSpeechSeconds { get; set; } = 0.2; // speech within 15 s, with someone around, starts a recording (0.2 = the first sample)
+    public double KumoAloneStopSeconds { get; set; } = 5;  // an auto recording stops after this long with nobody around
+    public double KumoQuietStopSeconds { get; set; } = 180; // ...or after this long with no speech
+    public double KumoMinSpeechSeconds { get; set; } = 20;  // an auto recording with less speech than this is deleted
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 

@@ -63,6 +63,25 @@ internal static class Settings
         }
     }
 
+    /// <summary>Start and stop meeting recordings from Kumospace (KumoWatcher). Default ON; only "0" turns it off.</summary>
+    public static bool KumoAutoRecord
+    {
+        get
+        {
+            try { var f = FilePath("kumo_auto.txt"); return !File.Exists(f) || File.ReadAllText(f).Trim() != "0"; }
+            catch { return true; }
+        }
+        set
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath("kumo_auto.txt"))!);
+                File.WriteAllText(FilePath("kumo_auto.txt"), value ? "1" : "0");
+            }
+            catch { /* non-fatal */ }
+        }
+    }
+
     /// <summary>When the Notes window shows: "always" (paired with the recorder; the default on Windows),
     /// "record" (opens when a recording starts), or "off". File notes.txt; anything else reads as "always".</summary>
     public static string NotesMode

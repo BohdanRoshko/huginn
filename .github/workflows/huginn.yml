@@ -40,13 +40,14 @@ jobs:
       - name: Install the macOS workload
         run: dotnet workload install macos
 
-      # The workload refuses any Xcode but the one it was built against, and which workload a runner gets varies.
-      # So read the version from the installed SDK pack (Microsoft.macOS.Sdk.net10.0_26.0 → Xcode 26.0) and pick it.
+      # Each macOS SDK pack accepts only the Xcode it was built against. The project pins its pack version
+      # (net10.0-macos26.0), so select that Xcode.
       - name: Pick the Xcode the workload wants
         run: |
           set -euo pipefail
           ls -d /Applications/Xcode*.app
-          V=$(ls -d "$HOME"/.dotnet/packs/Microsoft.macOS.Sdk.net10.0_* | sed 's/.*_//' | sort -V | tail -1)
+          ls -d "$HOME"/.dotnet/packs/Microsoft.macOS.Sdk.net10.0_*
+          V=$(grep -o 'net10.0-macos[0-9.]*' mac/Huginn.Mac.csproj | head -1 | sed 's/net10.0-macos//')
           echo "workload wants Xcode $V"
           X=$(ls -d /Applications/Xcode_"$V".app /Applications/Xcode_"$V".*.app 2>/dev/null | grep -v beta | sort -V | tail -1 || true)
           test -n "$X" || { echo "::error::no Xcode $V on this runner"; exit 1; }

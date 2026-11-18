@@ -2,7 +2,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// A small, always-visible "● REC 00:03:21" pill pinned to the top-center of the screen while a meeting

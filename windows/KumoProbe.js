@@ -1,9 +1,9 @@
-// Munin's read of the Kumospace desktop page, run over the DevTools port once a second (KumoWatcher.cs).
+// Huginn's read of the Kumospace desktop page, run over the DevTools port once a second (KumoWatcher.cs).
 // It reads the app's Redux store and the Daily call object; it sends nothing to Kumospace's servers.
 // The only thing it starts is Daily's local audio-level observers, which measure the tracks this client
 // already receives. Samples are buffered here between reads and handed over (drained) on each read.
 (() => {
-  const M = window.__munin || (window.__munin = { v: 1, buf: [], lbuf: [], call: null, store: null });
+  const M = window.__huginn || (window.__huginn = { v: 1, buf: [], lbuf: [], call: null, store: null });
   const findStore = () => {
     const root = document.getElementById("root") || document.body.firstElementChild;
     const key = root && Object.keys(root).find((k) => k.startsWith("__reactContainer$"));

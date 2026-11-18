@@ -1,4 +1,4 @@
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Keeps Whisper's decoder from running away on a long track. Fed a whole meeting, whisper.cpp sometimes locks

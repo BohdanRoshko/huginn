@@ -1,10 +1,10 @@
-namespace Munin;
+namespace Huginn;
 
-/// <summary>Tiny persisted runtime flags in %LOCALAPPDATA%\Munin (survive restarts).</summary>
+/// <summary>Tiny persisted runtime flags in %LOCALAPPDATA%\Huginn (survive restarts).</summary>
 internal static class Settings
 {
     private static string FilePath(string name) => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", name);
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", name);
 
     public static bool CleanupEnabled
     {

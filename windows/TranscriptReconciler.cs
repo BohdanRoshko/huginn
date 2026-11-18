@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// De-echoes a 2-track meeting transcript ("Me" = microphone, "Them" = system audio / the remote party). When the

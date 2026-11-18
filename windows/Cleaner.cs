@@ -3,12 +3,12 @@ using LLama;
 using LLama.Common;
 using LLama.Sampling;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Optional in-process cleanup LLM (Qwen2.5-3B via LLamaSharp + Vulkan). Tidies raw dictation —
 /// punctuation, capitalization, filler/word-repeat removal — without changing the wording.
-/// Runs INSIDE Munin's process, so it dies with the app; also unloaded when cleanup is toggled off, when
+/// Runs INSIDE Huginn's process, so it dies with the app; also unloaded when cleanup is toggled off, when
 /// recording is disabled, or after Config.IdleUnloadMinutes without use. Passes text through unchanged if not ready.
 /// </summary>
 internal sealed class Cleaner : IAsyncDisposable

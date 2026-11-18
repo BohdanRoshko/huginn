@@ -1,6 +1,6 @@
 using Windows.Media.Control;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Pauses whatever media is currently playing (browser, Spotify, etc.) while you dictate, then

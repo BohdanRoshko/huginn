@@ -1,14 +1,14 @@
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
-/// Config accessors. The user-facing knobs are now backed by runtime settings (<see cref="MuninSettings"/>,
+/// Config accessors. The user-facing knobs are now backed by runtime settings (<see cref="HuginnSettings"/>,
 /// from settings.json) rather than compile-time consts — so they're editable without recompiling. Call sites
 /// are unchanged (<c>Config.X</c>). Model filenames + download URLs stay constants here: they're download
 /// internals, not user-facing knobs (model-choice UI is a later phase).
 /// </summary>
 internal static class Config
 {
-    private static MuninSettings S => MuninSettings.Current;
+    private static HuginnSettings S => HuginnSettings.Current;
 
     // Push-to-talk: hold the modifier + main key, release to transcribe. VK codes.
     // VK list: https://learn.microsoft.com/windows/win32/inputdev/virtual-key-codes

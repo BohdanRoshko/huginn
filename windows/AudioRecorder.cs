@@ -1,7 +1,7 @@
 using NAudio.Utils;
 using NAudio.Wave;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Captures the microphone at 16 kHz / mono / 16-bit (exactly what Whisper wants) while the

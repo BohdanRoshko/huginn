@@ -1,12 +1,12 @@
 using System.Globalization;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// A work timer from my Kumospace status. One file per day, <c>Presence\yyyy-MM-dd.tsv</c>, with a line
 /// <c>HH:mm:ss&lt;TAB&gt;state</c> on each change and again every <see cref="Heartbeat"/>. States: available,
 /// focusing, away (Kumospace's own values), "not in space", "closed" (Kumospace not running), "unknown", "off"
-/// (Munin quit). A state lasts until the next line, at most <see cref="MaxGap"/> (after that Munin was not
+/// (Huginn quit). A state lasts until the next line, at most <see cref="MaxGap"/> (after that Huginn was not
 /// running, so the time is not counted), and never past midnight.
 /// </summary>
 internal sealed class PresenceLog
@@ -37,7 +37,7 @@ internal sealed class PresenceLog
             Directory.CreateDirectory(_dir);
             File.AppendAllText(Path.Combine(_dir, $"{t:yyyy-MM-dd}.tsv"), $"{t:HH:mm:ss}\t{state}\r\n");
         }
-        catch (Exception ex) { MuninLog.Write("presence: could not write", ex); }
+        catch (Exception ex) { HuginnLog.Write("presence: could not write", ex); }
     }
 
     /// <summary>Time per state on one day. <paramref name="now"/> ends the last open state of today.</summary>

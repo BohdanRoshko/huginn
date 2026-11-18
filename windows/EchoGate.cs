@@ -1,4 +1,4 @@
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Decides which "Me" (microphone) segments are not the user at all. On speakers the mic re-captures the far

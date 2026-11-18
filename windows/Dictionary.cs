@@ -1,8 +1,8 @@
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// The user's personal dictionary — domain terms Whisper tends to mis-spell (product names, brands, acronyms).
-/// Loaded from %LOCALAPPDATA%\Munin\dictionary.txt (one term per line; lines starting with '#' are comments).
+/// Loaded from %LOCALAPPDATA%\Huginn\dictionary.txt (one term per line; lines starting with '#' are comments).
 /// Seeded with defaults on first run so the file exists to edit. Fed into Whisper as an initial prompt
 /// (spelling bias) and into the cleanup LLM as a spelling-authority list. Never throws — a bad file falls
 /// back to the defaults.
@@ -11,12 +11,12 @@ internal static class Dictionary
 {
     private static readonly string[] Defaults =
     {
-        "Odin", "Munin", "Mimir",
+        "Odin", "Huginn", "Mimir",
         "OAuth", "Bohdan",
     };
 
     private static string FilePath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", "dictionary.txt");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "dictionary.txt");
 
     /// <summary>Terms from the file (seeded with defaults if the file is absent or empty).</summary>
     public static IReadOnlyList<string> Terms()
@@ -28,7 +28,7 @@ internal static class Dictionary
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllLines(path,
-                    new[] { "# Munin personal dictionary — one term per line. Lines starting with # are ignored." }
+                    new[] { "# Huginn personal dictionary — one term per line. Lines starting with # are ignored." }
                         .Concat(Defaults));
                 return Defaults;
             }

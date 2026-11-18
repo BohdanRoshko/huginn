@@ -3,7 +3,7 @@ using System.Text;
 using Whisper.net;
 using Whisper.net.Ggml;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>One transcribed chunk with its position in the audio (relative to the track's start).</summary>
 internal readonly record struct TranscriptSegment(TimeSpan Start, TimeSpan End, string Text);
@@ -172,7 +172,7 @@ internal sealed class Transcriber : IAsyncDisposable
                 }
             }
             var tidy = SpeechChunker.Tidy(segs);
-            MuninLog.Write($"transcribe: {(chunks == null ? "whole track" : $"{chunks.Count} speech chunks")}, {segs.Count} segments, {tidy.LoopsCollapsed} loop repeats collapsed, {tidy.OverlapsDropped} overlaps dropped");
+            HuginnLog.Write($"transcribe: {(chunks == null ? "whole track" : $"{chunks.Count} speech chunks")}, {segs.Count} segments, {tidy.LoopsCollapsed} loop repeats collapsed, {tidy.OverlapsDropped} overlaps dropped");
             return tidy.Segments;
         }
         finally
@@ -226,7 +226,7 @@ internal sealed class Transcriber : IAsyncDisposable
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            MuninLog.Write("transcribe: VAD unavailable, transcribing the whole track", ex);
+            HuginnLog.Write("transcribe: VAD unavailable, transcribing the whole track", ex);
             return null;
         }
     }

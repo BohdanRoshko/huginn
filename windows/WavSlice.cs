@@ -1,4 +1,4 @@
-namespace Munin;
+namespace Huginn;
 
 /// <summary>Cuts a chunk out of an in-memory 16 kHz mono 16-bit WAV as a standalone WAV stream, so one
 /// Whisper processor can take a track chunk by chunk. Building a processor per chunk costs a whisper state

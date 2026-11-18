@@ -2,7 +2,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// The notepad that pairs with <see cref="MeetingPanel"/>: the same size and skin, placed beside it. The
@@ -135,7 +135,7 @@ internal sealed class NotesPanel : Form
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; });
     public void HidePanel() => Ui(() => { SavePosition(); if (Visible) Hide(); });
 
-    /// <summary>Bring the pad to the keyboard (only when the user is already interacting with Munin).</summary>
+    /// <summary>Bring the pad to the keyboard (only when the user is already interacting with Huginn).</summary>
     public void FocusPad() => Ui(() => { if (!Visible) return; Activate(); _pad.Focus(); });
 
     /// <summary>The recorder moved or was shown/hidden: decide whether this window shows its own controls.</summary>
@@ -485,7 +485,7 @@ internal sealed class NotesPanel : Form
 
     // ---- position persistence (defaults to beside the recorder) ----
     private static string PosFile => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", "notes_panel_pos.txt");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "notes_panel_pos.txt");
 
     private void SavePosition()
     {

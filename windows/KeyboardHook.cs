@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Low-level keyboard hook for push-to-talk. Supports an optional modifier: recording is "engaged"

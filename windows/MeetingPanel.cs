@@ -3,7 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Text.Json;
 using System.Windows.Forms;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>Dot/severity of a recording row.</summary>
 internal enum JobTone { Busy, Good, Warn, Bad, Muted }
@@ -669,7 +669,7 @@ internal sealed class MeetingPanel : Form
         string? Transcript = null, bool Renamed = false);
 
     private static string RecentFile => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", "Meetings", "recent.json");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "Meetings", "recent.json");
 
     private void SaveRecent()
     {
@@ -745,7 +745,7 @@ internal sealed class MeetingPanel : Form
 
     // ---- position persistence (defaults to the 3rd monitor) ----
     private static string PosFile => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Munin", "meeting_panel_pos.txt");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "meeting_panel_pos.txt");
 
     private void SavePosition()
     {

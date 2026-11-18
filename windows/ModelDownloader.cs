@@ -1,4 +1,4 @@
-namespace Munin;
+namespace Huginn;
 
 internal static class ModelDownloader
 {

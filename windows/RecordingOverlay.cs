@@ -4,7 +4,7 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// The on-demand dictation overlay: a SMALL dark pill near the bottom of the screen (state indicator + live

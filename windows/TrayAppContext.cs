@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Windows.Forms;
 using NAudio.Wave;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// The whole app: a tray icon that wires the keyboard hook → recorder → transcriber → paste,
@@ -75,7 +75,7 @@ internal sealed class TrayAppContext : ApplicationContext
     public TrayAppContext()
     {
         _modelPath = Paths.ModelPath();
-        MuninLog.Write("Munin started");
+        HuginnLog.Write("Huginn started");
 
         _marshal = new Form { ShowInTaskbar = false };
         _ = _marshal.Handle; // force handle creation on the UI thread so Invoke works
@@ -92,7 +92,7 @@ internal sealed class TrayAppContext : ApplicationContext
         _media = Config.PauseMediaWhileRecording ? new MediaController() : null;
         _cleaner = new Cleaner(Paths.CleanupModelPath());
         // Personal dictionary → bias Whisper's decoder toward domain-term spellings + give the cleanup LLM a
-        // spelling authority for them. Edit %LOCALAPPDATA%\Munin\dictionary.txt to add terms.
+        // spelling authority for them. Edit %LOCALAPPDATA%\Huginn\dictionary.txt to add terms.
         _transcriber.InitialPrompt = Dictionary.WhisperPrompt();
         _cleaner.Vocabulary = Dictionary.VocabularyLine();
         _meeting = new MeetingRecorder { MicDeviceNumber = MicSettings.Load() };
@@ -118,7 +118,7 @@ internal sealed class TrayAppContext : ApplicationContext
             if (_notesMode != "always") return;
             if (_panel.Visible) _notes.ShowPanel(); else _notes.HidePanel();
         };
-        var ms = MuninSettings.Current;
+        var ms = HuginnSettings.Current;
         _kumo = new KumoWatcher(ms.KumoDebugPort);
         _detector = new KumoMeetingDetector
         {
@@ -157,7 +157,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             Icon = _iconOff,
             Visible = true,
-            Text = "Munin",
+            Text = "Huginn",
             ContextMenuStrip = BuildMenu(),
         };
 
@@ -177,7 +177,7 @@ internal sealed class TrayAppContext : ApplicationContext
     }
 
     /// <summary>The programmatic quit channel (SKILL lifecycle contract): a host app writes
-    /// %LOCALAPPDATA%\Munin\quit.flag → Munin flushes any active recording to disk (skipping
+    /// %LOCALAPPDATA%\Huginn\quit.flag → Huginn flushes any active recording to disk (skipping
     /// transcription — the WAVs survive) and exits. A stale flag from a crashed host is cleared
     /// at startup WITHOUT quitting.</summary>
     private void StartQuitWatcher()
@@ -201,7 +201,7 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         if (_quitting) return; // Created + Changed can both fire for one write
         _quitting = true;
-        MuninLog.Write("quit flag received");
+        HuginnLog.Write("quit flag received");
         try { File.Delete(Paths.QuitFlagPath()); } catch { /* best effort */ }
         if (_meeting.IsRecording)
         {
@@ -224,10 +224,10 @@ internal sealed class TrayAppContext : ApplicationContext
             }
             catch (Exception ex)
             {
-                MuninLog.Write("model download failed", ex);
+                HuginnLog.Write("model download failed", ex);
                 SetIcon(_iconOff);
                 SetStatus($"Model download failed: {ex.Message}");
-                ShowBalloon("Munin — model download failed", ex.Message);
+                ShowBalloon("Huginn — model download failed", ex.Message);
                 return;
             }
         }
@@ -362,14 +362,14 @@ internal sealed class TrayAppContext : ApplicationContext
             KumoStatus.Watching => KumoWatchingText(),
             KumoStatus.NotInSpace => "Kumospace: open, not in a space",
             KumoStatus.NotRunning => "Kumospace: not running",
-            KumoStatus.NoDebugPort => "Kumospace: restart it so Munin can follow meetings",
+            KumoStatus.NoDebugPort => "Kumospace: restart it so Huginn can follow meetings",
             _ => "Kumospace: off",
         };
         if (s == KumoStatus.NoDebugPort && _kumoAuto && !_kumoRestartHinted)
         {
             _kumoRestartHinted = true;
-            ShowInfo("Munin — Kumospace needs a restart",
-                "It was started without the port Munin reads. Tray → \"Kumospace: restart it…\" restarts it (you leave your room for a few seconds).");
+            ShowInfo("Huginn — Kumospace needs a restart",
+                "It was started without the port Huginn reads. Tray → \"Kumospace: restart it…\" restarts it (you leave your room for a few seconds).");
         }
     }
 
@@ -382,12 +382,12 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private async Task RestartKumoAsync()
     {
-        if (_meeting.IsRecording) { ShowBalloon("Munin — not now", "Stop the recording before restarting Kumospace."); return; }
+        if (_meeting.IsRecording) { ShowBalloon("Huginn — not now", "Stop the recording before restarting Kumospace."); return; }
         _kumoStatusItem.Enabled = false;
         _kumoStatusItem.Text = "Kumospace: restarting…";
-        if (!await KumoLauncher.RestartWithDebugPortAsync(MuninSettings.Current.KumoDebugPort))
+        if (!await KumoLauncher.RestartWithDebugPortAsync(HuginnSettings.Current.KumoDebugPort))
         {
-            ShowBalloon("Munin — Kumospace did not close", "Close Kumospace yourself; its shortcuts now start it the right way.");
+            ShowBalloon("Huginn — Kumospace did not close", "Close Kumospace yourself; its shortcuts now start it the right way.");
             OnKumoStatus(_kumo.Status);
         }
     }
@@ -455,7 +455,7 @@ internal sealed class TrayAppContext : ApplicationContext
             if (with != _lastCompanyLogged)
             {
                 _lastCompanyLogged = with;
-                MuninLog.Write(with.Length == 0 ? "kumo: alone" : $"kumo: with {with} ({(snap.Zone is { Length: > 0 } zn ? zn : "outside a room")})");
+                HuginnLog.Write(with.Length == 0 ? "kumo: alone" : $"kumo: with {with} ({(snap.Zone is { Length: > 0 } zn ? zn : "outside a room")})");
             }
             if (_kumo.Status == KumoStatus.Watching && snap.Company.Count != before) _kumoStatusItem.Text = KumoWatchingText();
             if (_meeting.IsRecording) _timeline?.Add(snap);
@@ -469,8 +469,8 @@ internal sealed class TrayAppContext : ApplicationContext
             _detector.OnAutoStarted(now);
             var zone = snap?.Zone is { Length: > 0 } z ? z : "outside a room";
             var people = string.Join(", ", snap?.Company.Select(p => p.Name) ?? Array.Empty<string>());
-            MuninLog.Write($"kumo: auto start ({reason}), {zone}, with {people}");
-            ShowInfo("Munin — recording a Kumospace meeting", $"{zone} · with {people}");
+            HuginnLog.Write($"kumo: auto start ({reason}), {zone}, with {people}");
+            ShowInfo("Huginn — recording a Kumospace meeting", $"{zone} · with {people}");
         }
         else if (action == KumoAction.Stop && _meeting.IsRecording)
         {
@@ -482,14 +482,14 @@ internal sealed class TrayAppContext : ApplicationContext
     {
         var speech = _detector.SpeechSecondsThisRecording;
         _detector.OnAutoStopped();
-        MuninLog.Write($"kumo: auto stop ({reason}), {speech:F0} s of speech");
-        if (speech < MuninSettings.Current.KumoMinSpeechSeconds)
+        HuginnLog.Write($"kumo: auto stop ({reason}), {speech:F0} s of speech");
+        if (speech < HuginnSettings.Current.KumoMinSpeechSeconds)
         {
             var cap = await EndMeetingAsync();
             DeleteCapture(cap);
             _notes.Discarded();
             SetStatus("Short chat not kept");
-            ShowInfo("Munin — short chat not kept", $"Only {speech:F0} s of talk, so the recording was deleted.");
+            ShowInfo("Huginn — short chat not kept", $"Only {speech:F0} s of talk, so the recording was deleted.");
             return;
         }
         await StopMeetingAsync();
@@ -533,7 +533,7 @@ internal sealed class TrayAppContext : ApplicationContext
         if (!File.Exists(_modelPath))
         {
             SetStatus("Meeting: model still downloading…");
-            ShowBalloon("Munin — can't record yet", "The Whisper model is still downloading.");
+            ShowBalloon("Huginn — can't record yet", "The Whisper model is still downloading.");
             return;
         }
         _meetingActive = true;
@@ -547,12 +547,12 @@ internal sealed class TrayAppContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            MuninLog.Write("meeting start failed", ex);
+            HuginnLog.Write("meeting start failed", ex);
             _meetingActive = false;
             _transcriber.KeepWarm = false;
             if (_enabled) _hook.Install();
             SetStatus($"Meeting start failed: {ex.Message}");
-            ShowBalloon("Munin — meeting recording failed", ex.Message);
+            ShowBalloon("Huginn — meeting recording failed", ex.Message);
             return;
         }
         _timeline = SpeakerTimeline.Begin(_meeting.StartedLocal);
@@ -566,7 +566,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             _notes.ShowRecording(_meeting.StartedLocal); // opens the window too, when it was hidden
             SaveNotes(); // an agenda typed before Record joins the file at [00:00:00]
-            // Hand the keyboard to the pad only when Record was clicked in one of Munin's own windows; a start
+            // Hand the keyboard to the pad only when Record was clicked in one of Huginn's own windows; a start
             // from the tray menu must not pull focus away from the call.
             if (Form.ActiveForm == _panel || Form.ActiveForm == _notes) _notes.FocusPad();
         }
@@ -609,7 +609,7 @@ internal sealed class TrayAppContext : ApplicationContext
         DeleteCapture(cap);
         _notes.Discarded();
         SetStatus("Recording discarded");
-        ShowInfo("Munin — recording discarded", "The meeting audio was deleted; nothing was transcribed or filed.");
+        ShowInfo("Huginn — recording discarded", "The meeting audio was deleted; nothing was transcribed or filed.");
     }
 
     private static void DeleteCapture(MeetingCapture? cap)
@@ -661,12 +661,12 @@ internal sealed class TrayAppContext : ApplicationContext
         _jobCts[jobId] = cts;
         var sw = Stopwatch.StartNew();
         var notes = MeetingNotes.Read(cap.NotesPath);
-        MuninLog.Write($"meeting {cap.Stamp}: processing started (me={FileSize(cap.MicPath)}, them={FileSize(cap.LoopPath)}, notes={(notes == null ? "none" : $"{notes.Count(c => c == '\n') + 1} lines")})");
+        HuginnLog.Write($"meeting {cap.Stamp}: processing started (me={FileSize(cap.MicPath)}, them={FileSize(cap.LoopPath)}, notes={(notes == null ? "none" : $"{notes.Count(c => c == '\n') + 1} lines")})");
         try
         {
             var r = await MeetingProcessor.TranscribeAsync(cap, _transcriber, cts.Token);
-            MuninLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
-            MuninLog.Write($"meeting {cap.Stamp}: echo gates: {r.Echo}{(r.RawTranscriptPath == null ? "" : " (raw kept)")}");
+            HuginnLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
+            HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {r.Echo}{(r.RawTranscriptPath == null ? "" : " (raw kept)")}");
             _panel.SetJobTranscript(jobId, r.TranscriptPath);
             _notes.SetTranscriptReady(cap.Stamp);
             if (_sendMeetings)
@@ -676,20 +676,20 @@ internal sealed class TrayAppContext : ApplicationContext
                 try
                 {
                     var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd"), notes, cts.Token);
-                    MuninLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
+                    HuginnLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
                     if (!string.IsNullOrWhiteSpace(odin.Title)) _panel.SetJobTitle(jobId, odin.Title);
                     var sec = string.IsNullOrEmpty(odin.SecondaryType) ? "" : $" + {odin.SecondaryType}";
                     _panel.SetJobStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
                     _notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {odin.Title}");
-                    ShowInfo("Munin — meeting filed to Odin", $"{odin.Classification} · {odin.TaskCount} task(s){sec}\n{odin.Title}");
+                    ShowInfo("Huginn — meeting filed to Odin", $"{odin.Classification} · {odin.TaskCount} task(s){sec}\n{odin.Title}");
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
-                    MuninLog.Write($"meeting {cap.Stamp}: Odin filing failed", ex);
+                    HuginnLog.Write($"meeting {cap.Stamp}: Odin filing failed", ex);
                     _panel.SetJobStatus(jobId, "Saved · Odin offline", JobTone.Warn, cancelable: false);
                     _notes.SetJobStatus(cap.Stamp, "Saved · Odin offline");
-                    ShowBalloon("Munin — Odin not reachable", $"Saved the transcript to disk; file it later.\n{Path.GetFileName(r.TranscriptPath)}");
+                    ShowBalloon("Huginn — Odin not reachable", $"Saved the transcript to disk; file it later.\n{Path.GetFileName(r.TranscriptPath)}");
                     OpenInExplorer(r.TranscriptPath);
                 }
             }
@@ -697,22 +697,22 @@ internal sealed class TrayAppContext : ApplicationContext
             {
                 _panel.SetJobStatus(jobId, "Saved", JobTone.Good, cancelable: false);
                 _notes.SetJobStatus(cap.Stamp, "✓ Transcript saved");
-                ShowInfo("Munin — meeting transcript ready", Path.GetFileName(r.TranscriptPath));
+                ShowInfo("Huginn — meeting transcript ready", Path.GetFileName(r.TranscriptPath));
                 OpenInExplorer(r.TranscriptPath);
             }
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            MuninLog.Write($"meeting {cap.Stamp}: cancelled by user after {sw.Elapsed:m\\:ss}");
+            HuginnLog.Write($"meeting {cap.Stamp}: cancelled by user after {sw.Elapsed:m\\:ss}");
             _panel.SetJobStatus(jobId, "Cancelled", JobTone.Muted, cancelable: false);
             _notes.SetJobStatus(cap.Stamp, "Cancelled");
         }
         catch (Exception ex)
         {
-            MuninLog.Write($"meeting {cap.Stamp}: FAILED after {sw.Elapsed:m\\:ss}", ex);
+            HuginnLog.Write($"meeting {cap.Stamp}: FAILED after {sw.Elapsed:m\\:ss}", ex);
             _panel.SetJobStatus(jobId, $"Failed · {ShortReason(ex)}", JobTone.Bad, cancelable: false);
             _notes.SetJobStatus(cap.Stamp, $"Failed · {ShortReason(ex)}");
-            ShowBalloon("Munin — meeting processing failed", $"{ex.Message}\nDetails: {Paths.LogPath()}");
+            ShowBalloon("Huginn — meeting processing failed", $"{ex.Message}\nDetails: {Paths.LogPath()}");
         }
         finally
         {
@@ -884,7 +884,7 @@ internal sealed class TrayAppContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            MuninLog.Write("dictation failed", ex);
+            HuginnLog.Write("dictation failed", ex);
             SetStatus($"Error: {ex.Message}");
         }
         finally

@@ -3,7 +3,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>A person in the Kumospace space. <see cref="Id"/> is the census id (Daily's user_id).</summary>
 internal sealed record KumoPerson(string Id, string Name);
@@ -99,7 +99,7 @@ internal sealed class KumoWatcher : IDisposable
                         continue;
                     }
                     _cdp = await CdpClient.ConnectAsync(url, ct).ConfigureAwait(false);
-                    MuninLog.Write("kumo: connected to the Kumospace page");
+                    HuginnLog.Write("kumo: connected to the Kumospace page");
                 }
 
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -113,7 +113,7 @@ internal sealed class KumoWatcher : IDisposable
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
-                if (_cdp != null) MuninLog.Write($"kumo: lost the page ({ex.GetType().Name}: {ex.Message})");
+                if (_cdp != null) HuginnLog.Write($"kumo: lost the page ({ex.GetType().Name}: {ex.Message})");
                 _cdp?.Dispose();
                 _cdp = null;
                 try { await Task.Delay(2000, ct).ConfigureAwait(false); } catch { break; }
@@ -129,7 +129,7 @@ internal sealed class KumoWatcher : IDisposable
     {
         if (Status == s) return;
         Status = s;
-        MuninLog.Write($"kumo: {s}");
+        HuginnLog.Write($"kumo: {s}");
         StatusChanged?.Invoke(s);
     }
 
@@ -218,7 +218,7 @@ internal sealed class KumoWatcher : IDisposable
 
     private static string LoadScript()
     {
-        using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("Munin.KumoProbe.js")
+        using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("Huginn.KumoProbe.js")
             ?? throw new InvalidOperationException("KumoProbe.js is not embedded");
         using var r = new StreamReader(s);
         return r.ReadToEnd();
@@ -231,7 +231,7 @@ internal sealed class KumoWatcher : IDisposable
     }
 }
 
-/// <summary>Starts Kumospace with the DevTools port Munin reads, and keeps its shortcuts starting it that way.</summary>
+/// <summary>Starts Kumospace with the DevTools port Huginn reads, and keeps its shortcuts starting it that way.</summary>
 internal static class KumoLauncher
 {
     // Squirrel installs a stub here that forwards its arguments to the current app-x.y.z\Kumospace.exe.
@@ -253,7 +253,7 @@ internal static class KumoLauncher
         foreach (var p in Process.GetProcessesByName("Kumospace"))
             using (p) { try { p.CloseMainWindow(); } catch { /* no window */ } }
         for (int i = 0; i < 40 && IsRunning(); i++) await Task.Delay(250).ConfigureAwait(false);
-        if (IsRunning()) { MuninLog.Write("kumo: Kumospace did not close; restart skipped"); return false; }
+        if (IsRunning()) { HuginnLog.Write("kumo: Kumospace did not close; restart skipped"); return false; }
         Start(port);
         return true;
     }
@@ -261,11 +261,11 @@ internal static class KumoLauncher
     public static void Start(int port)
     {
         Process.Start(new ProcessStartInfo(StubPath, $"--remote-debugging-port={port}") { UseShellExecute = false });
-        MuninLog.Write($"kumo: started Kumospace with --remote-debugging-port={port}");
+        HuginnLog.Write($"kumo: started Kumospace with --remote-debugging-port={port}");
     }
 
     /// <summary>Adds the port flag to the Start menu and desktop shortcuts. Kumospace's updater rewrites them on
-    /// every update, so Munin re-applies this at each start. Editing the arguments keeps the shortcut's app id.</summary>
+    /// every update, so Huginn re-applies this at each start. Editing the arguments keeps the shortcut's app id.</summary>
     public static void EnsureShortcuts(int port)
     {
         var flag = $"--remote-debugging-port={port}";
@@ -297,10 +297,10 @@ internal static class KumoLauncher
                     if (args.Contains("--remote-debugging-port", StringComparison.OrdinalIgnoreCase)) continue;
                     link.Arguments = (args + " " + flag).Trim();
                     link.Save();
-                    MuninLog.Write($"kumo: added {flag} to {lnk}");
+                    HuginnLog.Write($"kumo: added {flag} to {lnk}");
                 }
             }
         }
-        catch (Exception ex) { MuninLog.Write("kumo: could not update the Kumospace shortcuts", ex); }
+        catch (Exception ex) { HuginnLog.Write("kumo: could not update the Kumospace shortcuts", ex); }
     }
 }

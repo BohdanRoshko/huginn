@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Who Kumospace heard talking during one recording: the remote audio levels per person (from Daily, through
@@ -61,7 +61,7 @@ internal sealed class SpeakerTimeline
         {
             File.WriteAllText(path, JsonSerializer.Serialize(this), new UTF8Encoding(false));
         }
-        catch (Exception ex) { MuninLog.Write("speakers: could not save the timeline", ex); }
+        catch (Exception ex) { HuginnLog.Write("speakers: could not save the timeline", ex); }
     }
 
     public static SpeakerTimeline? Load(string path)
@@ -84,7 +84,7 @@ internal sealed class SpeakerTimeline
         }
         catch (Exception ex)
         {
-            MuninLog.Write($"speakers: could not read {Path.GetFileName(path)}", ex);
+            HuginnLog.Write($"speakers: could not read {Path.GetFileName(path)}", ex);
             return null;
         }
     }

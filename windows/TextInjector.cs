@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Drops transcribed text at the cursor by setting the clipboard and sending Ctrl+V,

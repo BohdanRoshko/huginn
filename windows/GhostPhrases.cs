@@ -1,4 +1,4 @@
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Filters known Whisper hallucinations — the phrases the model invents on short, low-content audio (breath,

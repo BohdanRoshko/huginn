@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>The notes typed in <see cref="NotesPanel"/> while a meeting records, as a file: one line per
 /// non-empty pad line, stamped with the offset from the recording start at which the line was begun (the
@@ -29,7 +29,7 @@ internal static class MeetingNotes
         }
         catch (Exception ex)
         {
-            MuninLog.Write("meeting notes save failed", ex);
+            HuginnLog.Write("meeting notes save failed", ex);
         }
     }
 

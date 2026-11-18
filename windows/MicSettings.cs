@@ -1,14 +1,14 @@
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// Remembers the chosen microphone across restarts. Stores a single WaveIn device index
-/// (-1 = Windows default) in %LOCALAPPDATA%\Munin\mic.txt.
+/// (-1 = Windows default) in %LOCALAPPDATA%\Huginn\mic.txt.
 /// </summary>
 internal static class MicSettings
 {
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Munin", "mic.txt");
+        "Huginn", "mic.txt");
 
     public static int Load()
     {

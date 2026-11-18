@@ -2,7 +2,7 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>What Odin made of a posted meeting transcript.</summary>
 internal sealed record OdinMeetingResult(string Classification, string Title, string Slug, int TaskCount, string? SecondaryType);
@@ -10,7 +10,7 @@ internal sealed record OdinMeetingResult(string Classification, string Title, st
 /// <summary>
 /// Posts a finished meeting transcript to Odin's meeting agent (<c>POST /api/meetings/process</c>), which
 /// classifies it and files a meeting note + tasks (+ optional client-log/worklog). Best-effort and fully
-/// decoupled: if Odin is down this throws and Munin keeps the transcript file as the fallback.
+/// decoupled: if Odin is down this throws and Huginn keeps the transcript file as the fallback.
 /// </summary>
 internal static class OdinClient
 {

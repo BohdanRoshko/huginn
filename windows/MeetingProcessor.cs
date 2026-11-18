@@ -2,7 +2,7 @@ using System.Text;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>The artifacts a finished meeting recording produces. <paramref name="RawTranscriptPath"/> is set only
 /// when the echo gates removed something: the untouched interleave, kept for a second look.</summary>
@@ -105,12 +105,12 @@ internal static class MeetingProcessor
             if (File.Exists(target))
                 target = Path.Combine(Path.GetDirectoryName(target)!, $"{Path.GetFileNameWithoutExtension(target)} (2).txt");
             File.Move(currentPath, target);
-            MuninLog.Write($"meeting {stamp}: transcript renamed -> {Path.GetFileName(target)}");
+            HuginnLog.Write($"meeting {stamp}: transcript renamed -> {Path.GetFileName(target)}");
             return target;
         }
         catch (Exception ex)
         {
-            MuninLog.Write($"meeting {stamp}: transcript rename failed", ex);
+            HuginnLog.Write($"meeting {stamp}: transcript rename failed", ex);
             return currentPath;
         }
     }
@@ -150,12 +150,12 @@ internal static class MeetingProcessor
     /// A line with no clear speaker stays "Them". The header names the rooms and the people.</summary>
     internal static string NameSpeakers(string text, List<(TimeSpan start, TimeSpan end)> themSpans, SpeakerTimeline tl, string stamp)
     {
-        var talk = MuninSettings.Current.KumoTalkLevel;
+        var talk = HuginnSettings.Current.KumoTalkLevel;
         var lines = text.Replace("\r\n", "\n").Split('\n');
         int themCount = lines.Count(l => ThemLine.IsMatch(l));
         if (themCount != themSpans.Count)
         {
-            MuninLog.Write($"meeting {stamp}: speaker names skipped ({themCount} Them lines vs {themSpans.Count} segments)");
+            HuginnLog.Write($"meeting {stamp}: speaker names skipped ({themCount} Them lines vs {themSpans.Count} segments)");
             return text;
         }
         int k = 0, named = 0;
@@ -169,7 +169,7 @@ internal static class MeetingProcessor
             lines[i] = m.Groups[1].Value + who + lines[i][m.Groups[2].Index..];
             named++;
         }
-        MuninLog.Write($"meeting {stamp}: speakers: named {named} of {themCount} Them lines; {tl.Describe()}");
+        HuginnLog.Write($"meeting {stamp}: speakers: named {named} of {themCount} Them lines; {tl.Describe()}");
 
         for (int i = 0; i < lines.Length; i++)
         {

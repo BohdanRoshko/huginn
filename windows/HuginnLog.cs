@@ -1,9 +1,9 @@
-namespace Munin;
+namespace Huginn;
 
-/// <summary>Append-only diagnostics log at %LOCALAPPDATA%\Munin\munin.log (see <see cref="Paths.LogPath"/>).
-/// Never throws; rotates once to munin.log.1 past 2 MB. This is where a failure's exception text goes, since a
+/// <summary>Append-only diagnostics log at %LOCALAPPDATA%\Huginn\huginn.log (see <see cref="Paths.LogPath"/>).
+/// Never throws; rotates once to huginn.log.1 past 2 MB. This is where a failure's exception text goes, since a
 /// tray balloon is gone in seconds.</summary>
-internal static class MuninLog
+internal static class HuginnLog
 {
     private const long RotateBytes = 2 * 1024 * 1024;
     private static readonly object Gate = new();

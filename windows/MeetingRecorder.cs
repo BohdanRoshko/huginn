@@ -1,7 +1,7 @@
 using System.Globalization;
 using NAudio.Wave;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>A finished capture, snapshotted so the recorder is immediately free to record again while
 /// this one is transcribed/filed in the background.</summary>

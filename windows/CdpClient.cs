@@ -2,7 +2,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
-namespace Munin;
+namespace Huginn;
 
 /// <summary>
 /// A minimal Chrome DevTools Protocol client: one page target, one call at a time, Runtime.evaluate only.

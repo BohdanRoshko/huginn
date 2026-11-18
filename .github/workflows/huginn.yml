@@ -63,15 +63,14 @@ jobs:
 
       - name: Build the Mac app
         run: |
-          set -o pipefail
-          dotnet build mac/Huginn.Mac.csproj -c Release -v:d > "$RUNNER_TEMP/build.log" 2>&1 || {
-            echo "--- where the whisper symbols come from ---"
-            grep -n -i "whisper_free\b\|ReferenceNativeSymbol\|RequiredSymbol\|__Internal\|Dlsym\|initial-undefines\|exported_symbols\|-u _whisper" "$RUNNER_TEMP/build.log" | cut -c1-400 | head -80
+          if ! dotnet build mac/Huginn.Mac.csproj -c Release -v:n > "$RUNNER_TEMP/build.log" 2>&1; then
             echo "--- errors ---"
-            grep -E ": error " "$RUNNER_TEMP/build.log" | sort -u | head -20
+            grep -E "error|Undefined symbols|referenced from" "$RUNNER_TEMP/build.log" | grep -v "initial-undefines" | sort -u | cut -c1-400 | head -60 || true
+            echo "--- last lines ---"
+            tail -40 "$RUNNER_TEMP/build.log" | cut -c1-400 || true
             exit 1
-          }
-          tail -5 "$RUNNER_TEMP/build.log"
+          fi
+          grep -E "warning|Whisper natives" "$RUNNER_TEMP/build.log" | sort -u | cut -c1-300 | head -40 || true
 
       - name: Find the bundle
         run: |

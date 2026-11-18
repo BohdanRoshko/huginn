@@ -106,8 +106,8 @@ internal interface IShell
     void RunOnUi(Action action);
     void SetTrayState(TrayState state);
     void SetStatus(string text);
+    /// <summary>A notification, for failures only: Bohdan does not want notices for things that went as expected.</summary>
     void Warn(string title, string text);
-    void Info(string title, string text);
     /// <summary>Shows the file in Explorer / Finder.</summary>
     void Reveal(string path);
     /// <summary>One of Huginn's own windows has the keyboard (so the notes pad may take it).</summary>

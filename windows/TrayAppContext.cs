@@ -119,9 +119,6 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
     public void Warn(string title, string text) =>
         RunOnUi(() => _tray.ShowBalloonTip(5000, title, text, ToolTipIcon.Warning));
 
-    public void Info(string title, string text) =>
-        RunOnUi(() => _tray.ShowBalloonTip(4000, title, text, ToolTipIcon.Info));
-
     public void Reveal(string path)
     {
         try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true }); }

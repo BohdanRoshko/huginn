@@ -32,7 +32,6 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private string? _lastCompanyLogged;
     private long _lastKumoReadAt;
     private int _presenceRefresh;
-    private bool _kumoRestartHinted;
     private MeetingCapture? _current;      // the recording in progress
     private bool _meetingActive;
     private int _processingCount;
@@ -599,10 +598,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
                     var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), notes, cts.Token);
                     HuginnLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
                     if (!string.IsNullOrWhiteSpace(odin.Title)) Recent.SetTitle(jobId, odin.Title);
-                    var sec = string.IsNullOrEmpty(odin.SecondaryType) ? "" : $" + {odin.SecondaryType}";
                     Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
                     Ui(() => _p.Notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {odin.Title}"));
-                    _shell.Info("Huginn — meeting filed to Odin", $"{odin.Classification} · {odin.TaskCount} task(s){sec}\n{odin.Title}");
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
                 catch (Exception ex)
@@ -618,7 +615,6 @@ internal sealed class HuginnEngine : IAsyncDisposable
             {
                 Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
                 Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
-                _shell.Info("Huginn — meeting transcript ready", Path.GetFileName(r.TranscriptPath));
                 _shell.Reveal(Recent.TranscriptPathFor(cap.Stamp) ?? r.TranscriptPath);
             }
         }
@@ -681,12 +677,6 @@ internal sealed class HuginnEngine : IAsyncDisposable
             KumoStatus.NoDebugPort => "Kumospace: restart it so Huginn can follow meetings",
             _ => "Kumospace: off",
         };
-        if (s == KumoStatus.NoDebugPort && KumoAuto && !_kumoRestartHinted)
-        {
-            _kumoRestartHinted = true;
-            _shell.Info("Huginn — Kumospace needs a restart",
-                "It was started without the port Huginn reads. Click \"Kumospace: restart it…\" in Huginn's menu to restart it (you leave your room for a few seconds).");
-        }
         _shell.Refresh();
     }
 
@@ -776,7 +766,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             var zone = snap?.Zone is { Length: > 0 } z ? z : "outside a room";
             var people = string.Join(", ", snap?.Company.Select(p => p.Name) ?? Array.Empty<string>());
             HuginnLog.Write($"kumo: auto start ({reason}), {zone}, with {people}");
-            _shell.Info("Huginn — recording a Kumospace meeting", $"{zone} · with {people}");
+            SetStatus($"● Recording · {zone} · with {people}");
         }
         else if (action == KumoAction.Stop && _p.Meeting.IsRecording)
         {
@@ -794,8 +784,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             var cap = await EndMeetingAsync();
             DeleteCapture(cap);
             _p.Notes.Discarded();
-            SetStatus("Short chat not kept");
-            _shell.Info("Huginn — short chat not kept", $"Only {speech:F0} s of talk, so the recording was deleted.");
+            SetStatus($"Short chat not kept ({speech:F0} s of talk)");
             return;
         }
         await StopMeetingAsync();

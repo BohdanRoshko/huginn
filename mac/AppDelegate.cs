@@ -153,8 +153,6 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
     public void Warn(string title, string text) => Notify(title, text);
 
-    public void Info(string title, string text) => Notify(title, text);
-
     private void Notify(string title, string text)
     {
         HuginnLog.Write($"notice: {title}: {text.Replace('\n', ' ')}");

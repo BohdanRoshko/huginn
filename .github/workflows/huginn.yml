@@ -1,7 +1,8 @@
 name: Huginn
 
-# One shared C# core, two shells. This workflow tests the core and builds both apps. Nobody on the authoring side
-# has a Mac, so the macOS runner is the only place the Mac app is compiled, run and photographed.
+# One shared C# core, two shells. A push tests the core and builds Windows only. The Mac app (the macOS runner is the
+# only place it is compiled, run and photographed) and the release are built only when started by hand
+# ("Run workflow", or: gh workflow run huginn.yml): Bohdan's call during active development, 2026-11-18.
 
 on:
   push:
@@ -47,6 +48,7 @@ jobs:
           if-no-files-found: error
 
   mac:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -190,9 +192,10 @@ jobs:
           path: Huginn.zip
           if-no-files-found: error
 
-  # Every green build on main becomes a GitHub Release with both zips, so anyone can download Huginn from
+  # Every hand-started build becomes a GitHub Release with both zips, so anyone can download Huginn from
   # https://github.com/BohdanRoshko/huginn/releases/latest without building it or signing in.
   release:
+    if: github.event_name == 'workflow_dispatch'
     needs: [windows, mac]
     runs-on: ubuntu-latest
     permissions:

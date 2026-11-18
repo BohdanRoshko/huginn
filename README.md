@@ -64,7 +64,7 @@ copied) and left a junction at the old path. The Mac app moves the Swift app's `
 
 ## Download
 
-Every green build is published as a release:
+Mac builds and releases are started by hand (Actions → Huginn → Run workflow); each one publishes:
 
 - Mac: [Huginn-macOS.zip](https://github.com/BohdanRoshko/huginn/releases/latest/download/Huginn-macOS.zip)
   (Apple Silicon, macOS 13 or newer)

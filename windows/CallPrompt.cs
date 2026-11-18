@@ -10,30 +10,34 @@ namespace Huginn;
 /// <summary>
 /// The "Start meeting recording" pop-up, laid out like Notion's meeting pop-up: a dark pill at the top centre of the
 /// screen with an icon tile, a title and a subtitle, and a blue split button ("Start recording" and an arrow with the
-/// other choices). It never takes focus from the call. It goes away on a choice, when the call ends, or after
-/// <see cref="ShowSeconds"/> on its own.
+/// other choices). Sizes and colours were measured from Notion's pop-up on this screen (2026-11-18). It never takes
+/// focus from the call. It goes away on a choice, when the call ends, or after <see cref="ShowSeconds"/>; a thin bar
+/// along its bottom edge fills as that time runs out, as Notion's does.
 /// </summary>
 internal sealed class CallPrompt : Form, ICallPrompt
 {
-    private const int ShowSeconds = 45;
+    private const int ShowSeconds = 30;
     private const int Pad = 14;                 // room for the shadow around the pill
-    private const int PillW = 460, PillH = 60;
+    private const int PillW = 460, PillH = 61;
     private const int W = PillW + 2 * Pad, H = PillH + 2 * Pad;
     private static readonly Rectangle Pill = new(Pad, Pad, PillW, PillH);
-    private static readonly Rectangle Button = new(Pad + PillW - 16 - 178, Pad + 13, 178, 34);
-    private static readonly Rectangle Arrow = new(Button.Right - 34, Button.Y, 34, Button.Height);
+    private static readonly Rectangle Button = new(Pad + PillW - 15 - 176, Pad + 12, 176, 36);
+    private static readonly Rectangle Arrow = new(Button.Right - 31, Button.Y, 31, Button.Height);
     private static readonly Rectangle Main = new(Button.X, Button.Y, Button.Width - Arrow.Width, Button.Height);
 
-    private static readonly Color Bg = Color.FromArgb(37, 37, 37);
-    private static readonly Color Edge = Color.FromArgb(60, 255, 255, 255);
-    private static readonly Color Blue = Color.FromArgb(35, 131, 226);
-    private static readonly Color BlueHover = Color.FromArgb(52, 146, 238);
-    private static readonly Color Sub = Color.FromArgb(165, 165, 165);
+    private static readonly Color Bg = Color.FromArgb(32, 32, 32);          // #202020
+    private static readonly Color Edge = Color.FromArgb(40, 255, 255, 255);
+    private static readonly Color Blue = Color.FromArgb(39, 131, 222);      // #2783DE
+    private static readonly Color BlueHover = Color.FromArgb(58, 145, 230);
+    private static readonly Color Sub = Color.FromArgb(155, 154, 152);
+    private static readonly Color Countdown = Color.FromArgb(125, 122, 117);
 
-    private readonly Font _title = new("Segoe UI Semibold", 10f);
-    private readonly Font _sub = new("Segoe UI", 8.75f);
-    private readonly Font _button = new("Segoe UI Semibold", 10f);
+    private readonly Font _title = new("Segoe UI", 10.5f, FontStyle.Bold);
+    private readonly Font _sub = new("Segoe UI", 9.5f);
+    private readonly Font _button = new("Segoe UI", 10f, FontStyle.Bold);
     private readonly System.Windows.Forms.Timer _timeout = new() { Interval = ShowSeconds * 1000 };
+    private readonly System.Windows.Forms.Timer _tick = new() { Interval = 100 }; // redraws the countdown bar
+    private DateTime _shownAt;
     private readonly ContextMenuStrip _menu = new();
     private string _app = "";
     private int _hover; // 0 none, 1 main, 2 arrow
@@ -48,6 +52,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
         StartPosition = FormStartPosition.Manual;
         Size = new Size(W, H);
         _timeout.Tick += (_, _) => { _timeout.Stop(); OptionChosen?.Invoke("not now"); };
+        _tick.Tick += (_, _) => { if (Visible) Render(); };
         _menu.Items.Add("Not now", null, (_, _) => OptionChosen?.Invoke("not now"));
         _menu.Items.Add("Always record meetings automatically", null, (_, _) => OptionChosen?.Invoke("auto"));
         _menu.Items.Add("Don't ask again", null, (_, _) => OptionChosen?.Invoke("off"));
@@ -74,15 +79,18 @@ internal sealed class CallPrompt : Form, ICallPrompt
         // Top centre of the screen the user is looking at (the one with the foreground window), like Notion's.
         var screen = Screen.FromHandle(GetForegroundWindow());
         Location = new Point(screen.Bounds.Left + (screen.Bounds.Width - W) / 2, screen.Bounds.Top + 16 - Pad);
+        _shownAt = DateTime.Now;
         if (!Visible) Show();
         Render();
         _timeout.Stop();
         _timeout.Start();
+        _tick.Start();
     });
 
     public void HidePrompt() => Ui(() =>
     {
         _timeout.Stop();
+        _tick.Stop();
         _menu.Close();
         if (Visible) Hide();
     });
@@ -134,53 +142,62 @@ internal sealed class CallPrompt : Form, ICallPrompt
         {
             using var bg = new SolidBrush(Bg);
             g.FillPath(bg, pill);
+
+            // The countdown: a thin warm-grey bar along the bottom edge, filling left to right as the time runs out.
+            var elapsed = Math.Clamp((DateTime.Now - _shownAt).TotalSeconds / ShowSeconds, 0, 1);
+            var clip = g.Clip;
+            g.SetClip(pill);
+            using (var bar = new SolidBrush(Countdown))
+                g.FillRectangle(bar, Pill.X, Pill.Bottom - 2, (float)(Pill.Width * elapsed), 2);
+            g.Clip = clip;
+
             using var edge = new Pen(Edge, 1f);
             g.DrawPath(edge, pill);
         }
 
-        // Icon tile: white rounded square with Huginn's waveform.
-        var tile = new Rectangle(Pill.X + 20, Pill.Y + 13, 34, 34);
-        using (var tp = Rounded(tile, 8))
+        // Icon tile: white rounded square with Huginn's waveform (Notion's tile sits at the same place and size).
+        var tile = new Rectangle(Pill.X + 22, Pill.Y + 14, 32, 33);
+        using (var tp = Rounded(tile, 7))
         using (var white = new SolidBrush(Color.White))
             g.FillPath(white, tp);
         int[] bars = { 8, 16, 24, 14, 20, 10 };
         using (var ink = new SolidBrush(Color.FromArgb(25, 25, 25)))
             for (int i = 0; i < bars.Length; i++)
             {
-                float bx = tile.X + 7 + i * 3.8f, bh = bars[i];
+                float bx = tile.X + 6 + i * 3.8f, bh = bars[i];
                 using var bar = Rounded(new RectangleF(bx, tile.Y + (tile.Height - bh) / 2f, 2.4f, bh), 1.2f);
                 g.FillPath(ink, bar);
             }
 
-        int tx = tile.Right + 12;
         // GDI+ text, not TextRenderer: GDI writes alpha 0 into a 32-bit layered bitmap and the letters would vanish.
-        using (var w = new SolidBrush(Color.White)) g.DrawString("Start Meeting Recording", _title, w, tx - 2, Pill.Y + 10);
+        float tx = Pill.X + 64;
+        using (var w = new SolidBrush(Color.White)) g.DrawString("Start Meeting Recording", _title, w, tx, Pill.Y + 13);
         using (var sb = new SolidBrush(Sub))
         using (var fmt = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString($"{_app} detected", _sub, sb, new RectangleF(tx - 1, Pill.Y + 31, Button.X - tx - 8, 18), fmt);
+            g.DrawString($"{_app} detected", _sub, sb, new RectangleF(tx + 1, Pill.Y + 33, Button.X - tx - 8, 20), fmt);
 
-        // Split button: "Start recording" | ⌄
-        using (var bp = Rounded(Button, 8))
-        using (var blue = new SolidBrush(Blue))
-            g.FillPath(blue, bp);
-        if (_hover != 0)
+        // Split button, fully rounded: "Start recording" | ⌄
+        using (var bp = Rounded(Button, Button.Height / 2f))
         {
-            var part = _hover == 1 ? Main : Arrow;
-            using var hp = Rounded(Button, 8);
-            var clip = g.Clip;
-            g.SetClip(part);
-            using var hb = new SolidBrush(BlueHover);
-            g.FillPath(hb, hp);
-            g.Clip = clip;
+            using var blue = new SolidBrush(Blue);
+            g.FillPath(blue, bp);
+            if (_hover != 0)
+            {
+                var clip = g.Clip;
+                g.SetClip(_hover == 1 ? Main : Arrow);
+                using var hb = new SolidBrush(BlueHover);
+                g.FillPath(hb, bp);
+                g.Clip = clip;
+            }
         }
-        using (var div = new Pen(Color.FromArgb(90, 255, 255, 255), 1f))
-            g.DrawLine(div, Arrow.X, Arrow.Y + 7, Arrow.X, Arrow.Bottom - 7);
+        using (var div = new Pen(Color.FromArgb(46, 255, 255, 255), 1f))
+            g.DrawLine(div, Arrow.X, Arrow.Y + 9, Arrow.X, Arrow.Bottom - 9);
         using (var w = new SolidBrush(Color.White))
         using (var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-            g.DrawString("Start recording", _button, w, new RectangleF(Main.X + 2, Main.Y, Main.Width, Main.Height), center);
-        using (var chevron = new Pen(Color.White, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawString("Start recording", _button, w, new RectangleF(Main.X + 3, Main.Y, Main.Width, Main.Height), center);
+        using (var chevron = new Pen(Color.White, 1.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
         {
-            float cx = Arrow.X + Arrow.Width / 2f, cy = Arrow.Y + Arrow.Height / 2f;
+            float cx = Arrow.X + Arrow.Width / 2f - 1, cy = Arrow.Y + Arrow.Height / 2f;
             g.DrawLines(chevron, new[] { new PointF(cx - 4.5f, cy - 2f), new PointF(cx, cy + 2.5f), new PointF(cx + 4.5f, cy - 2f) });
         }
     }
@@ -227,7 +244,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _timeout.Dispose(); _menu.Dispose(); _title.Dispose(); _sub.Dispose(); _button.Dispose(); }
+        if (disposing) { _timeout.Dispose(); _tick.Dispose(); _menu.Dispose(); _title.Dispose(); _sub.Dispose(); _button.Dispose(); }
         base.Dispose(disposing);
     }
 

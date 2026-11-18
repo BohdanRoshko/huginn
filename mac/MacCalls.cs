@@ -119,11 +119,13 @@ internal sealed class MacMicUsers : IMicUsers
 /// screen, under the menu bar, with an icon tile, a title, a subtitle and a blue split button. Never takes focus.</summary>
 internal sealed class MacCallPrompt : ICallPrompt
 {
-    private const double W = 460, H = 60;
+    private const double W = 460, H = 61;
+    private const int ShowSeconds = 30;
     private readonly NSPanel _panel;
     private readonly PromptView _view;
     private readonly NSMenu _menu;
     private NSTimer? _timeout;
+    private NSTimer? _tick;
 
     public event Action? StartRequested;
     public event Action<string>? OptionChosen;
@@ -159,14 +161,19 @@ internal sealed class MacCallPrompt : ICallPrompt
         var f = screen.VisibleFrame;
         _panel.SetFrameOrigin(new CGPoint(f.X + (f.Width - W) / 2, f.Y + f.Height - H - 10));
         _panel.OrderFrontRegardless();
+        _view.ShownAt = DateTime.Now;
         _timeout?.Invalidate();
-        _timeout = NSTimer.CreateScheduledTimer(45, _ => OptionChosen?.Invoke("not now"));
+        _timeout = NSTimer.CreateScheduledTimer(ShowSeconds, _ => OptionChosen?.Invoke("not now"));
+        _tick?.Invalidate();
+        _tick = NSTimer.CreateRepeatingScheduledTimer(TimeSpan.FromMilliseconds(100), _ => _view.NeedsDisplay = true); // the countdown bar
     });
 
     public void HidePrompt() => MacUi.OnMain(() =>
     {
         _timeout?.Invalidate();
         _timeout = null;
+        _tick?.Invalidate();
+        _tick = null;
         _menu.CancelTracking();
         _panel.OrderOut(null);
     });
@@ -174,10 +181,12 @@ internal sealed class MacCallPrompt : ICallPrompt
     private sealed class PromptView : NSView
     {
         public string App = "";
+        public DateTime ShownAt = DateTime.Now;
         public Action? OnStart;
         public Action<CGPoint>? OnArrow;
-        private static readonly CGRect Button = new(W - 16 - 178, 13, 178, 34);
-        private static readonly CGRect Arrow = new(Button.Right - 34, Button.Y, 34, Button.Height);
+        // Measured from Notion's pop-up (2026-11-18): button 176 x 36, fully rounded, 15 px from the right.
+        private static readonly CGRect Button = new(W - 15 - 176, 12, 176, 36);
+        private static readonly CGRect Arrow = new(Button.Right - 31, Button.Y, 31, Button.Height);
         private static readonly CGRect Main = new(Button.X, Button.Y, Button.Width - Arrow.Width, Button.Height);
 
         public PromptView(CGRect frame) : base(frame) { }
@@ -190,46 +199,53 @@ internal sealed class MacCallPrompt : ICallPrompt
         public override void DrawRect(CGRect dirtyRect)
         {
             var pill = NSBezierPath.FromRoundedRect(new CGRect(0.5, 0.5, W - 1, H - 1), (nfloat)((H - 1) / 2), (nfloat)((H - 1) / 2));
-            C(37, 37, 37).SetFill();
+            C(32, 32, 32).SetFill();
             pill.Fill();
-            C(255, 255, 255, 0.24).SetStroke();
+            // The countdown: a thin warm-grey bar along the bottom edge, filling left to right as the time runs out.
+            var elapsed = Math.Clamp((DateTime.Now - ShownAt).TotalSeconds / ShowSeconds, 0, 1);
+            NSGraphicsContext.CurrentContext?.SaveGraphicsState();
+            pill.AddClip();
+            C(125, 122, 117).SetFill();
+            NSBezierPath.FillRect(new CGRect(0, H - 2, W * elapsed, 2));
+            NSGraphicsContext.CurrentContext?.RestoreGraphicsState();
+            C(255, 255, 255, 0.16).SetStroke();
             pill.LineWidth = 1;
             pill.Stroke();
 
             // Icon tile with Huginn's waveform.
-            var tile = new CGRect(20, 13, 34, 34);
+            var tile = new CGRect(22, 14, 32, 33);
             NSColor.White.SetFill();
-            NSBezierPath.FromRoundedRect(tile, 8, 8).Fill();
+            NSBezierPath.FromRoundedRect(tile, 7, 7).Fill();
             C(25, 25, 25).SetFill();
             double[] bars = { 8, 16, 24, 14, 20, 10 };
             for (int i = 0; i < bars.Length; i++)
-                NSBezierPath.FromRoundedRect(new CGRect(tile.X + 7 + i * 3.8, tile.Y + (tile.Height - bars[i]) / 2, 2.4, bars[i]), (nfloat)1.2, (nfloat)1.2).Fill();
+                NSBezierPath.FromRoundedRect(new CGRect(tile.X + 6 + i * 3.8, tile.Y + (tile.Height - bars[i]) / 2, 2.4, bars[i]), (nfloat)1.2, (nfloat)1.2).Fill();
 
-            var tx = tile.Right + 12;
+            var tx = 64.0;
             new NSAttributedString("Start Meeting Recording", new NSStringAttributes
             {
-                Font = NSFont.SystemFontOfSize(13, NSFontWeight.Semibold), ForegroundColor = NSColor.White,
-            }).DrawAtPoint(new CGPoint(tx, 11));
+                Font = NSFont.SystemFontOfSize(14, NSFontWeight.Bold), ForegroundColor = NSColor.White,
+            }).DrawAtPoint(new CGPoint(tx, 12));
             new NSAttributedString($"{App} detected", new NSStringAttributes
             {
-                Font = NSFont.SystemFontOfSize((nfloat)11.5), ForegroundColor = C(165, 165, 165),
-            }).DrawAtPoint(new CGPoint(tx, 31));
+                Font = NSFont.SystemFontOfSize((nfloat)12.5), ForegroundColor = C(155, 154, 152),
+            }).DrawAtPoint(new CGPoint(tx + 1, 32));
 
-            C(35, 131, 226).SetFill();
-            NSBezierPath.FromRoundedRect(Button, 8, 8).Fill();
-            C(255, 255, 255, 0.35).SetStroke();
+            C(39, 131, 222).SetFill();
+            NSBezierPath.FromRoundedRect(Button, Button.Height / 2, Button.Height / 2).Fill();
+            C(255, 255, 255, 0.18).SetStroke();
             var div = new NSBezierPath();
-            div.MoveTo(new CGPoint(Arrow.X, Arrow.Y + 7));
-            div.LineTo(new CGPoint(Arrow.X, Arrow.Bottom - 7));
+            div.MoveTo(new CGPoint(Arrow.X, Arrow.Y + 9));
+            div.LineTo(new CGPoint(Arrow.X, Arrow.Bottom - 9));
             div.Stroke();
             var label = new NSAttributedString("Start recording", new NSStringAttributes
             {
-                Font = NSFont.SystemFontOfSize(13, NSFontWeight.Semibold), ForegroundColor = NSColor.White,
+                Font = NSFont.SystemFontOfSize(13.5f, NSFontWeight.Bold), ForegroundColor = NSColor.White,
             });
             var size = label.Size;
             label.DrawAtPoint(new CGPoint(Main.X + (Main.Width - size.Width) / 2 + 2, Main.Y + (Main.Height - size.Height) / 2));
             NSColor.White.SetStroke();
-            var chevron = new NSBezierPath { LineWidth = (nfloat)1.6, LineCapStyle = NSLineCapStyle.Round, LineJoinStyle = NSLineJoinStyle.Round };
+            var chevron = new NSBezierPath { LineWidth = (nfloat)1.4, LineCapStyle = NSLineCapStyle.Round, LineJoinStyle = NSLineJoinStyle.Round };
             var cx = Arrow.X + Arrow.Width / 2; var cy = Arrow.Y + Arrow.Height / 2;
             chevron.MoveTo(new CGPoint(cx - 4.5, cy - 2));
             chevron.LineTo(new CGPoint(cx, cy + 2.5));

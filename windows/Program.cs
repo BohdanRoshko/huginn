@@ -10,7 +10,10 @@ internal static class Program
         // One instance only — a second keyboard hook would double every keystroke.
         using var mutex = new Mutex(true, "Huginn_SingleInstance", out bool isNew);
         if (!isNew)
+        {
+            HuginnLog.Write("another Huginn is already running; this one exits");
             return;
+        }
 
         ApplicationConfiguration.Initialize();
 
@@ -22,6 +25,17 @@ internal static class Program
             return;
         }
 
-        Application.Run(new TrayAppContext());
+        // A crash goes to the log: a tray app has no console, and Windows Error Reporting keeps nothing readable.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => HuginnLog.Write("CRASH", (Exception)e.ExceptionObject);
+        Application.ThreadException += (_, e) => HuginnLog.Write("UI thread exception", e.Exception);
+        try
+        {
+            Application.Run(new TrayAppContext());
+        }
+        catch (Exception ex)
+        {
+            HuginnLog.Write("CRASH at startup", ex);
+            throw;
+        }
     }
 }

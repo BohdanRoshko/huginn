@@ -423,12 +423,16 @@ internal sealed class TrayAppContext : ApplicationContext
     private void FillPresenceDays()
     {
         _presenceItem.DropDownItems.Clear();
+        // The current week, Monday to Sunday, like a calendar: each day by its date, today as "Today".
         var now = DateTime.Now;
+        var today = DateTime.Today;
+        var monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
         for (int i = 0; i < 7; i++)
         {
-            var day = DateTime.Today.AddDays(-i);
-            var label = i == 0 ? "Today" : i == 1 ? "Yesterday" : day.ToString("ddd d MMM", CultureInfo.InvariantCulture);
-            var text = PresenceLog.Describe(PresenceLog.Totals(Paths.PresenceDir(), day, now), withAway: true);
+            var day = monday.AddDays(i);
+            var label = day == today ? "Today" : day.ToString("ddd d MMM", CultureInfo.InvariantCulture);
+            var text = day > today ? "—" : PresenceLog.Describe(PresenceLog.Totals(Paths.PresenceDir(), day, now), withAway: true);
+            if (day < today && text == "nothing yet") text = "—";
             _presenceItem.DropDownItems.Add(new ToolStripMenuItem($"{label}:  {text}") { Enabled = false });
         }
         _presenceItem.DropDownItems.Add(new ToolStripSeparator());

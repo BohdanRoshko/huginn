@@ -81,7 +81,14 @@
          loads the library itself at run time, so the target below just copies the files into the bundle. -->
     <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" ExcludeAssets="build;buildTransitive" GeneratePathProperty="true" />
     <!-- The cleanup LLM's native build for Apple Silicon (Metal). -->
-    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.25.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.25.0" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <!-- llama.cpp's Metal backend reads its shader source next to the library. The SDK will not place this .metal file
+       by itself (no PublishFolderType), so put it in Contents/MonoBundle with the dylibs. -->
+  <ItemGroup>
+    <None Include="$(PkgLLamaSharp_Backend_Cpu)/runtimes/osx-arm64/native/ggml-metal.metal" Link="ggml-metal.metal"
+          CopyToOutputDirectory="PreserveNewest" PublishFolderType="Assembly" />
   </ItemGroup>
 
   <!-- Contents/MonoBundle is the app's base directory; Whisper.net looks for runtimes/macos-arm64 under it. -->

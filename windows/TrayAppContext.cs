@@ -33,6 +33,8 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
     private ToolStripMenuItem _presenceItem = null!;
     private ToolStripMenuItem _panelItem = null!;
     private ToolStripMenuItem _notesOffItem = null!, _notesAlwaysItem = null!, _notesRecordItem = null!;
+    private ToolStripMenuItem _callAskItem = null!, _callAutoItem = null!, _callOffItem = null!;
+    private readonly CallPrompt _callPrompt = new();
 
     private readonly Icon _iconIdle;
     private readonly Icon _iconRec;
@@ -69,7 +71,9 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
             Notes: _notes,
             Overlay: _overlay,
             Media: Config.PauseMediaWhileRecording ? new MediaController() : null,
-            Indicator: _meetingOverlay), _recent);
+            Indicator: _meetingOverlay,
+            MicUsers: new WindowsMicUsers(),
+            CallPrompt: _callPrompt), _recent);
 
         _panel.RecordToggleRequested += _engine.ToggleMeeting;
         _panel.CancelRequested += _engine.CancelJob;
@@ -143,6 +147,9 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _notesOffItem.Checked = _engine.NotesMode == "off";
         _notesAlwaysItem.Checked = _engine.NotesMode == "always";
         _notesRecordItem.Checked = _engine.NotesMode == "record";
+        _callAskItem.Checked = _engine.CallMode == "ask";
+        _callAutoItem.Checked = _engine.CallMode == "auto";
+        _callOffItem.Checked = _engine.CallMode == "off";
     });
 
     public void Exit() => RunOnUi(ExitApp);
@@ -172,6 +179,13 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         if (_engine.HasOdin) menu.Items.Add(_sendMeetingsItem); // only Bohdan has Odin
         _kumoAutoItem = new ToolStripMenuItem("Auto-record Kumospace meetings", null, (_, _) => _engine.SetKumoAuto(!_engine.KumoAuto));
         menu.Items.Add(_kumoAutoItem);
+        // Meetings in other apps, found by who holds the mic: a Notion-style pop-up, auto-record, or nothing.
+        var callsMenu = new ToolStripMenuItem("Meet, Teams, Slack and Zoom calls");
+        _callAskItem = new ToolStripMenuItem("Ask with a pop-up", null, (_, _) => _engine.SetCallMode("ask"));
+        _callAutoItem = new ToolStripMenuItem("Record automatically", null, (_, _) => _engine.SetCallMode("auto"));
+        _callOffItem = new ToolStripMenuItem("Off", null, (_, _) => _engine.SetCallMode("off"));
+        callsMenu.DropDownItems.AddRange(new ToolStripItem[] { _callAskItem, _callAutoItem, _callOffItem });
+        menu.Items.Add(callsMenu);
         _kumoStatusItem = new ToolStripMenuItem("Kumospace: starting…", null, (_, _) => _ = _engine.RestartKumoAsync()) { Enabled = false };
         menu.Items.Add(_kumoStatusItem);
         _presenceItem = new ToolStripMenuItem("Kumospace today: nothing yet");
@@ -287,6 +301,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
             _tray.Dispose();
             _overlay?.Dispose();
             _meetingOverlay?.Dispose();
+            _callPrompt.Dispose();
             _panel.Dispose();
             _notes.Dispose();
             _marshal.Dispose();

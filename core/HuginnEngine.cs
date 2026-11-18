@@ -25,6 +25,11 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private readonly ConcurrentQueue<KumoSnapshot> _kumoReads = new();
     private readonly PresenceLog _presence = new(Paths.PresenceDir());
     private Timer? _kumoTimer;
+    private Timer? _callTimer;
+    private readonly CallDetector _calls = new();
+    private string? _callRecording;  // the call app whose start began the current recording (it ends it too)
+    private string? _prompting;      // the call app the pop-up is asking about
+    private int _callPolling;
     private Timer? _previewTimer;
     private FileSystemWatcher? _quitWatcher;
     private SpeakerTimeline? _timeline;
@@ -99,6 +104,10 @@ internal sealed class HuginnEngine : IAsyncDisposable
     public bool KumoAuto { get; private set; }
     /// <summary>"always", "record" or "off" (see <see cref="Settings.NotesMode"/>).</summary>
     public string NotesMode { get; private set; }
+    /// <summary>"ask", "auto" or "off" (see <see cref="Settings.CallMode"/>).</summary>
+    public string CallMode { get; private set; } = Settings.CallMode;
+    /// <summary>This OS can tell which apps hold the mic, so meeting apps can be followed.</summary>
+    public bool CanFollowCalls => _p.MicUsers != null;
     public bool IsMeetingRecording => _p.Meeting.IsRecording;
     public string HotkeyName => _p.Hotkey.Name;
     public string Microphone => _p.Dictation.Device;
@@ -123,6 +132,15 @@ internal sealed class HuginnEngine : IAsyncDisposable
         else
         {
             KumoStatusText = "Kumospace: not installed";
+        }
+        if (_p.MicUsers != null)
+        {
+            _callTimer = new Timer(_ => PollCalls(), null, 2000, 1000);
+            if (_p.CallPrompt != null)
+            {
+                _p.CallPrompt.StartRequested += () => Ui(StartFromPrompt);
+                _p.CallPrompt.OptionChosen += option => Ui(() => PromptOption(option));
+            }
         }
         _shell.SetTrayState(TrayState.Off);
         _shell.Refresh();
@@ -233,6 +251,15 @@ internal sealed class HuginnEngine : IAsyncDisposable
         KumoAuto = on;
         Settings.KumoAutoRecord = on;
         if (_kumo.Status == KumoStatus.NoDebugPort) OnKumoStatus(_kumo.Status);
+        _shell.Refresh();
+    }
+
+    public void SetCallMode(string mode)
+    {
+        CallMode = mode;
+        Settings.CallMode = mode;
+        HuginnLog.Write($"calls: mode {mode}");
+        if (mode != "ask") HidePrompt();
         _shell.Refresh();
     }
 
@@ -464,6 +491,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             _shell.Warn("Huginn — can't record yet", "The Whisper model is still downloading.");
             return;
         }
+        HidePrompt(); // a recording is starting, whoever started it: the pop-up has nothing left to ask
         _meetingActive = true;
         _transcriber.KeepWarm = true; // load now, so Stop finds the model in memory
         _ = _transcriber.EnsureLoadedAsync();
@@ -510,6 +538,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         var cap = await _p.Meeting.FinalizeAsync();
         SaveTimeline(cap);
         _current = null;
+        _callRecording = null;
 
         _meetingActive = false;
         _transcriber.KeepWarm = false;
@@ -669,6 +698,99 @@ internal sealed class HuginnEngine : IAsyncDisposable
         catch { /* priority is a nicety */ }
     }
 
+    // ---- calls in other apps: Google Meet, Teams, Slack huddles, Zoom ----
+
+    // Once a second, off the UI thread: ask the OS who holds the mic, then let the detector decide on the UI thread.
+    private void PollCalls()
+    {
+        if (Interlocked.Exchange(ref _callPolling, 1) == 1) return;
+        try
+        {
+            IReadOnlyList<MicUser> users;
+            try { users = _p.MicUsers!.Current(); }
+            catch (Exception ex) { HuginnLog.Write("calls: could not read the mic users", ex); users = Array.Empty<MicUser>(); }
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            Ui(() => HandleCalls(now, users));
+        }
+        finally { Volatile.Write(ref _callPolling, 0); }
+    }
+
+    private void HandleCalls(long now, IReadOnlyList<MicUser> users)
+    {
+        foreach (var e in _calls.Tick(now, users))
+        {
+            if (e.Kind == CallEventKind.Started) OnCallStarted(e.App);
+            else OnCallEnded(e.App);
+        }
+    }
+
+    private void OnCallStarted(string app)
+    {
+        HuginnLog.Write($"calls: {app} is using the mic (mode {CallMode}{(_p.Meeting.IsRecording ? ", already recording" : "")})");
+        if (CallMode == "off" || _p.Meeting.IsRecording) return;
+        if (CallMode == "auto")
+        {
+            StartForCall(app);
+            return;
+        }
+        _prompting = app;
+        _p.CallPrompt?.ShowPrompt(app);
+    }
+
+    private void OnCallEnded(string app)
+    {
+        HuginnLog.Write($"calls: {app} let go of the mic");
+        if (_prompting == app) HidePrompt();
+        if (_callRecording == app && _p.Meeting.IsRecording)
+        {
+            HuginnLog.Write($"calls: auto stop, {app} ended");
+            _ = StopMeetingAsync();
+        }
+    }
+
+    private void StartForCall(string app)
+    {
+        StartMeeting();
+        if (!_p.Meeting.IsRecording) return;
+        _callRecording = app;
+        HuginnLog.Write($"calls: recording {app}");
+        SetStatus($"● Recording · {app}");
+    }
+
+    private void StartFromPrompt()
+    {
+        var app = _prompting;
+        HidePrompt();
+        if (app == null || _p.Meeting.IsRecording) return;
+        StartForCall(app);
+    }
+
+    private void PromptOption(string option)
+    {
+        var app = _prompting;
+        switch (option)
+        {
+            case "auto":
+                SetCallMode("auto");
+                if (app != null && !_p.Meeting.IsRecording) StartForCall(app); // "always" includes this call
+                break;
+            case "off":
+                SetCallMode("off");
+                break;
+            default:
+                HuginnLog.Write($"calls: not now for {app}");
+                HidePrompt();
+                break;
+        }
+    }
+
+    private void HidePrompt()
+    {
+        if (_prompting == null) return;
+        _prompting = null;
+        _p.CallPrompt?.HidePrompt();
+    }
+
     // ---- Kumospace auto-record ----
 
     private void OnKumoStatus(KumoStatus s)
@@ -805,6 +927,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     {
         _quitWatcher?.Dispose();
         _kumoTimer?.Dispose();
+        _callTimer?.Dispose();
         _previewTimer?.Dispose();
         _kumo.Dispose();
         _p.Hotkey.Dispose();

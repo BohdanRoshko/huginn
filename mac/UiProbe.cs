@@ -8,9 +8,18 @@ namespace Huginn;
 /// the dictation pill in their recording states.</summary>
 internal static class UiProbe
 {
+    private static MacCallPrompt? Prompt; // kept alive while the probe runs
+
     public static void Run(IShell shell, NSStatusItem item, MacRecorderPanel panel, MacNotesWindow notes, MacDictationOverlay? overlay, RecentMeetings recent)
     {
         var mode = Environment.GetEnvironmentVariable("HUGINN_UI_PROBE");
+        if (mode == "prompt")
+        {
+            // The meeting pop-up as a call would raise it.
+            Prompt = new MacCallPrompt();
+            Prompt.ShowPrompt("Google Meet");
+            return;
+        }
         if (mode != "windows" && mode != "menu") return;
         var a = recent.Add("2026-11-18_093000", DateTime.Now.AddHours(-5));
         recent.SetTitle(a, "Sprint review with the team");

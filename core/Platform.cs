@@ -161,6 +161,25 @@ internal interface IMeetingIndicator
     void HideIndicator();
 }
 
+/// <summary>Which apps hold the microphone right now (Windows: the privacy log of mic use; Mac: Core Audio's process
+/// list). Called once a second off the UI thread.</summary>
+internal interface IMicUsers
+{
+    IReadOnlyList<MicUser> Current();
+}
+
+/// <summary>The "Start meeting recording" pop-up shown when a meeting app starts using the mic (Notion's pattern).</summary>
+internal interface ICallPrompt
+{
+    /// <summary>Shows the pop-up for this call app ("Google Meet", "Microsoft Teams", …).</summary>
+    void ShowPrompt(string app);
+    void HidePrompt();
+    /// <summary>The user clicked Start recording.</summary>
+    event Action? StartRequested;
+    /// <summary>The user picked an option from the arrow menu: "not now", "auto" or "off".</summary>
+    event Action<string>? OptionChosen;
+}
+
 /// <summary>Everything one OS hands the engine.</summary>
 internal sealed record Platform(
     IShell Shell,
@@ -173,4 +192,6 @@ internal sealed record Platform(
     INotesView Notes,
     IDictationOverlay? Overlay,
     IMediaControl? Media,
-    IMeetingIndicator? Indicator);
+    IMeetingIndicator? Indicator,
+    IMicUsers? MicUsers = null,
+    ICallPrompt? CallPrompt = null);

@@ -141,6 +141,12 @@ jobs:
           screencapture -x shots/menu.png || echo "screencapture failed (menu)"
           pkill -x Huginn || true
           sleep 2
+          # The meeting pop-up a Meet / Teams / Slack / Zoom call raises.
+          HUGINN_UI_PROBE=prompt "$APP/Contents/MacOS/Huginn" >> "$RUNNER_TEMP/ui.log" 2>&1 &
+          sleep 10
+          screencapture -x shots/prompt.png || echo "screencapture failed (prompt)"
+          pkill -x Huginn || true
+          sleep 2
           # The optional windows: recorder panel, Notes window, dictation pill.
           HUGINN_UI_PROBE=windows "$APP/Contents/MacOS/Huginn" >> "$RUNNER_TEMP/ui.log" 2>&1 &
           sleep 14

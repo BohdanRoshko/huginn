@@ -20,6 +20,18 @@ internal static class Settings
     /// <summary>Start and stop meeting recordings from Kumospace (KumoWatcher). Default ON.</summary>
     public static bool KumoAutoRecord { get => Flag("kumo_auto.txt", true); set => SetFlag("kumo_auto.txt", value); }
 
+    /// <summary>What happens when a meeting app (Google Meet, Teams, Slack huddle, Zoom) starts using the mic:
+    /// "ask" shows the pop-up (the default), "auto" records at once, "off" does nothing. File calls.txt.</summary>
+    public static string CallMode
+    {
+        get
+        {
+            var v = Read("calls.txt")?.ToLowerInvariant();
+            return v is "off" or "auto" ? v : "ask";
+        }
+        set => Write("calls.txt", value);
+    }
+
     /// <summary>When the Notes window shows: "always", "record" (opens when a recording starts), or "off". File
     /// notes.txt. Default "always" on Windows (beside the recorder), "off" on the Mac (as the Swift app had it).</summary>
     public static string NotesMode

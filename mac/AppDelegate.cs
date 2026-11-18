@@ -51,7 +51,9 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
             Notes: _notes,
             Overlay: _overlay,
             Media: null,       // macOS has no public API to pause whatever is playing
-            Indicator: null),  // the menu bar shows the recording clock instead
+            Indicator: null,   // the menu bar shows the recording clock instead
+            MicUsers: new MacMicUsers(),
+            CallPrompt: new MacCallPrompt()),
             _recent);
 
         _panel.RecordToggleRequested += _engine.ToggleMeeting;
@@ -245,6 +247,8 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
             m.AddItem(Sub(_engine.PresenceTodayText, PresenceMenu()));
         }
 
+        m.AddItem(Sub("Meet, Teams, Slack and Zoom Calls", CallsMenu()));
+
         m.AddItem(NSMenuItem.SeparatorItem);
         m.AddItem(Item("Open Recordings Folder", () => { Directory.CreateDirectory(Paths.MeetingsDir()); MacUi.Open(Paths.MeetingsDir()); }));
         m.AddItem(Item("Open Log", () => MacUi.Open(Paths.LogPath())));
@@ -321,6 +325,16 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         foreach (var line in _engine.PresenceWeek()) menu.AddItem(Item(line));
         menu.AddItem(NSMenuItem.SeparatorItem);
         menu.AddItem(Item("Open the Presence Folder", () => { Directory.CreateDirectory(Paths.PresenceDir()); MacUi.Open(Paths.PresenceDir()); }));
+        return menu;
+    }
+
+    // Meetings in other apps, found by who holds the mic: a Notion-style pop-up, auto-record, or nothing.
+    private NSMenu CallsMenu()
+    {
+        var menu = new NSMenu { AutoEnablesItems = false };
+        menu.AddItem(Check("Ask With a Pop-Up", _engine.CallMode == "ask", () => _engine.SetCallMode("ask")));
+        menu.AddItem(Check("Record Automatically", _engine.CallMode == "auto", () => _engine.SetCallMode("auto")));
+        menu.AddItem(Check("Off", _engine.CallMode == "off", () => _engine.SetCallMode("off")));
         return menu;
     }
 

@@ -37,7 +37,7 @@ if ($originUrl -notmatch '(?:github\.com[:/])([^/]+/[^/]+?)(?:\.git)?$') {
 $repoSlug = $Matches[1]
 Write-Host "Repository: $repoSlug" -ForegroundColor DarkGray
 
-$run = & $ghExe run list --repo $repoSlug --limit 1 --status success `
+$run = & $ghExe run list --repo $repoSlug --workflow huginn.yml --limit 1 --status success `
     --json databaseId,displayTitle,headSha,createdAt | ConvertFrom-Json
 if (-not $run) { throw "No successful runs found for $repoSlug." }
 

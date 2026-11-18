@@ -1,0 +1,139 @@
+name: Huginn
+
+# One shared C# core, two shells. This workflow tests the core and builds both apps. Nobody on the authoring side
+# has a Mac, so the macOS runner is the only place the Mac app is compiled, run and photographed.
+
+on:
+  push:
+    branches: [main]
+    paths: ['core/**', 'mac/**', 'windows/**', 'tests/**', 'Huginn.sln', '.github/workflows/huginn.yml']
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test the core
+        run: dotnet test tests/Huginn.Core.Tests -c Release
+      - name: Build the Windows app
+        run: dotnet build windows/Huginn.csproj -c Release
+
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The .NET 10 macOS workload needs the Xcode it was built against; take the newest 26.x on the image.
+      - name: Pick Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          xcodebuild -version
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install the macOS workload
+        run: dotnet workload install macos
+
+      - name: Test the core
+        run: dotnet test tests/Huginn.Core.Tests -c Release
+
+      - name: Build the Mac app
+        run: dotnet build mac/Huginn.Mac.csproj -c Release
+
+      - name: Find the bundle
+        run: |
+          set -euo pipefail
+          APP=$(find mac/bin/Release -maxdepth 4 -name Huginn.app -type d | head -1)
+          test -n "$APP" || { echo "::error::Huginn.app was not produced"; exit 1; }
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "--- native libraries in the bundle ---"
+          find "$APP" \( -name "*.dylib" -o -name "*.metal" \) | sed "s#^$APP/##"
+          /usr/libexec/PlistBuddy -c "Print" "$APP/Contents/Info.plist"
+
+      # Ad hoc is free and enough: Apple Silicon refuses an unsigned binary, and Gatekeeper's prompt is handled once
+      # on the user's side (README). No hardened runtime: that needs a Developer ID.
+      - name: Ad-hoc sign
+        run: |
+          set -euo pipefail
+          codesign --force --deep --sign - --timestamp=none "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      # The runner is a real Apple Silicon Mac: push known speech through the SHIPPED app, dictation and the whole
+      # meeting pipeline. base.en sits under the production file name to keep the download small.
+      - name: Self-test transcription
+        run: |
+          set -euo pipefail
+          export HUGINN_DATA_DIR="$RUNNER_TEMP/huginn-data"
+          mkdir -p "$HUGINN_DATA_DIR"
+          curl -sSL --fail -o "$HUGINN_DATA_DIR/ggml-large-v3-turbo.bin" \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+          say -o "$RUNNER_TEMP/probe.aiff" "The quarterly inventory report is ready for review."
+          afconvert -f WAVE -d LEI16@16000 "$RUNNER_TEMP/probe.aiff" "$RUNNER_TEMP/probe.wav"
+          HUGINN_SELFTEST=transcribe HUGINN_SELFTEST_WAV="$RUNNER_TEMP/probe.wav" \
+            HUGINN_SELFTEST_EXPECT=quarterly,inventory,report \
+            "$APP/Contents/MacOS/Huginn"
+          echo "--- huginn.log ---"
+          cat "$HUGINN_DATA_DIR/huginn.log" || true
+
+      - name: Photograph the windows
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          export HUGINN_DATA_DIR="$RUNNER_TEMP/huginn-ui"
+          mkdir -p "$HUGINN_DATA_DIR" shots
+          cp "$RUNNER_TEMP/huginn-data/ggml-large-v3-turbo.bin" "$HUGINN_DATA_DIR/" || true
+          HUGINN_UI_PROBE=windows "$APP/Contents/MacOS/Huginn" > "$RUNNER_TEMP/ui.log" 2>&1 &
+          sleep 14
+          screencapture -x shots/windows.png || echo "screencapture failed"
+          pkill -x Huginn || true
+          cat "$RUNNER_TEMP/ui.log" || true
+          cat "$HUGINN_DATA_DIR/huginn.log" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: Huginn-screenshots
+          path: shots/
+          if-no-files-found: warn
+
+      # Live capture needs permissions a user grants by hand; a refusal here is information, not a failure.
+      - name: Probe live capture
+        continue-on-error: true
+        timeout-minutes: 6
+        run: |
+          set -uo pipefail
+          export HUGINN_DATA_DIR="$RUNNER_TEMP/huginn-capture"
+          mkdir -p "$HUGINN_DATA_DIR"
+          cp "$RUNNER_TEMP/huginn-data/ggml-large-v3-turbo.bin" "$HUGINN_DATA_DIR/"
+          ( sleep 2; for i in 1 2 3; do afplay "$RUNNER_TEMP/probe.aiff"; done ) &
+          set +e
+          HUGINN_SELFTEST=capture HUGINN_SELFTEST_EXPECT=inventory "$APP/Contents/MacOS/Huginn"
+          echo "capture self-test exit $?  (0 ok, 2 could not start, 3 words missing, 5 silent)"
+          exit 0
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent "$APP" Huginn.zip
+          ls -lh Huginn.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Huginn-macOS
+          path: Huginn.zip
+          if-no-files-found: error

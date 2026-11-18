@@ -1,4 +1,4 @@
-name: Build Huginn
+name: Swift app (retiring)
 
 on:
   push:
@@ -271,7 +271,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: Huginn-screenshots
+          name: Huginn-swift-screenshots
           path: mac-swift/shots/
           if-no-files-found: warn
 
@@ -327,6 +327,6 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Huginn-macOS
+          name: Huginn-macOS-swift
           path: mac-swift/Huginn.zip
           if-no-files-found: error

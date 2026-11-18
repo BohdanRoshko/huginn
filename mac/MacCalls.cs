@@ -157,7 +157,8 @@ internal sealed class MacCallPrompt : ICallPrompt
     {
         _view.App = app;
         _view.NeedsDisplay = true;
-        var screen = NSScreen.MainScreen ?? NSScreen.Screens[0];
+        // The main screen (the one with the menu bar), always: NSScreen.MainScreen is the screen with the active window.
+        var screen = NSScreen.Screens[0];
         var f = screen.VisibleFrame;
         _panel.SetFrameOrigin(new CGPoint(f.X + (f.Width - W) / 2, f.Y + f.Height - H - 10));
         _panel.OrderFrontRegardless();

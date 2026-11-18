@@ -76,8 +76,8 @@ internal sealed class CallPrompt : Form, ICallPrompt
     {
         _app = app;
         _hover = 0;
-        // Top centre of the screen the user is looking at (the one with the foreground window), like Notion's.
-        var screen = Screen.FromHandle(GetForegroundWindow());
+        // Top centre of the main screen, always (Bohdan's choice, 2026-11-18; not the screen with the active window).
+        var screen = Screen.PrimaryScreen ?? Screen.AllScreens[0];
         Location = new Point(screen.Bounds.Left + (screen.Bounds.Width - W) / 2, screen.Bounds.Top + 16 - Pad);
         _shownAt = DateTime.Now;
         if (!Visible) Show();
@@ -253,7 +253,6 @@ internal sealed class CallPrompt : Form, ICallPrompt
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     private struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
 
-    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize,
         IntPtr hdcSrc, ref POINT pprSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);

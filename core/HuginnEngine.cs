@@ -59,7 +59,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
 
         DictationEnabled = Settings.DictationEnabled;
         CleanupEnabled = Settings.CleanupEnabled;
-        SendMeetings = Settings.SendMeetingsToOdin;
+        HasOdin = !string.IsNullOrWhiteSpace(s.OdinBaseUrl);
+        SendMeetings = HasOdin && Settings.SendMeetingsToOdin;
         KumoAuto = Settings.KumoAutoRecord;
         NotesMode = Settings.NotesMode;
         _p.Dictation.Device = Settings.Microphone;
@@ -92,6 +93,9 @@ internal sealed class HuginnEngine : IAsyncDisposable
     public bool DictationEnabled { get; private set; }
     public bool CleanupEnabled { get; private set; }
     public bool SendMeetings { get; private set; }
+    /// <summary>settings.json names an Odin to file to. Only Bohdan has Odin; for everyone else the menu hides the
+    /// Odin item and meetings are only saved.</summary>
+    public bool HasOdin { get; }
     public bool KumoAuto { get; private set; }
     /// <summary>"always", "record" or "off" (see <see cref="Settings.NotesMode"/>).</summary>
     public string NotesMode { get; private set; }
@@ -218,6 +222,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
 
     public void SetSendMeetings(bool on)
     {
+        if (!HasOdin) return;
         SendMeetings = on;
         Settings.SendMeetingsToOdin = on;
         _shell.Refresh();

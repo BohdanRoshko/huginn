@@ -169,7 +169,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _discardItem = new ToolStripMenuItem("Stop && discard recording", null, (_, _) => _engine.Discard()) { Enabled = false };
         menu.Items.Add(_discardItem);
         _sendMeetingsItem = new ToolStripMenuItem("Auto-file meetings to Odin", null, (_, _) => _engine.SetSendMeetings(!_engine.SendMeetings));
-        menu.Items.Add(_sendMeetingsItem);
+        if (_engine.HasOdin) menu.Items.Add(_sendMeetingsItem); // only Bohdan has Odin
         _kumoAutoItem = new ToolStripMenuItem("Auto-record Kumospace meetings", null, (_, _) => _engine.SetKumoAuto(!_engine.KumoAuto));
         menu.Items.Add(_kumoAutoItem);
         _kumoStatusItem = new ToolStripMenuItem("Kumospace: starting…", null, (_, _) => _ = _engine.RestartKumoAsync()) { Enabled = false };

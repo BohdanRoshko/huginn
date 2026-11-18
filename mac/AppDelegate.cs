@@ -234,7 +234,8 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         m.AddItem(cleanup);
 
         m.AddItem(NSMenuItem.SeparatorItem);
-        m.AddItem(Check("Auto-File Meetings to Odin", _engine.SendMeetings, () => _engine.SetSendMeetings(!_engine.SendMeetings)));
+        if (_engine.HasOdin) // only Bohdan has Odin
+            m.AddItem(Check("Auto-File Meetings to Odin", _engine.SendMeetings, () => _engine.SetSendMeetings(!_engine.SendMeetings)));
         if (_engine.KumoInstalled)
         {
             m.AddItem(Check("Auto-Record Kumospace Meetings", _engine.KumoAuto, () => _engine.SetKumoAuto(!_engine.KumoAuto)));

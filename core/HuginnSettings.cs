@@ -24,7 +24,9 @@ internal sealed class HuginnSettings
     public int IdleUnloadMinutes { get; set; } = 30;
     public int MeetingThreads { get; set; } = 4; // CPU threads for meeting transcription; 0 = every hardware thread (the Whisper default)
     public int MeetingRestPercent { get; set; } = 50; // after each speech chunk, rest this share of the time the chunk took; 0 = full speed
-    public string OdinBaseUrl { get; set; } = "http://localhost:5180";
+    // Odin is Bohdan's own app. Empty (the default) = no Odin: the menu hides "Auto-file meetings to Odin" and
+    // nothing is posted. His settings.json sets http://localhost:5180.
+    public string OdinBaseUrl { get; set; } = "";
     // Kumospace auto-record (KumoWatcher / KumoMeetingDetector). Levels are Daily's 0..1 audio level.
     public int KumoDebugPort { get; set; } = 9222;          // the DevTools port Kumospace is started with
     public double KumoTalkLevel { get; set; } = 0.03;       // a level at or above this counts as talking

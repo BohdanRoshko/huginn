@@ -34,7 +34,7 @@ belongs in the core.
 | Clean up text (AI) | Runs the dictated text through a local Qwen 2.5 3B before pasting. |
 | Start / Stop meeting recording | Two-track recording. The recorder panel shows a live level meter. |
 | Stop & discard recording | Stops and deletes the audio. Nothing is transcribed or filed. |
-| Auto-file meetings to Odin | Posts each transcript (and your notes) to Odin's `/api/meetings/process`. |
+| Auto-file meetings to Odin | Posts each transcript (and your notes) to Odin's `/api/meetings/process`. Shown only when `OdinBaseUrl` is set in settings.json; Odin is Bohdan's own app, so by default the item is hidden and nothing is posted. |
 | Auto-record Kumospace meetings | Starts when you are with someone and someone talks; stops 5 s after you are alone or after 3 min of quiet; deletes a chat with under 20 s of talk. |
 | Kumospace status / today | Who you are with; your Kumospace availability as a work timer, today and this week (Monday first). |
 | Show recorder panel | A floating window: level meter, Record/Stop, and the last 8 meetings: name (Odin's title or yours), time, status. ✕ cancels a job in flight; the copy icon copies the transcript path; double-click renames (the file follows); right-click opens or reveals it. |
@@ -71,7 +71,7 @@ copied) and left a junction at the old path. The Mac app moves the Swift app's `
 3. Launch it. A waveform appears in the menu bar; Huginn is a menu bar app, as the Swift app was. The menu has
    Start/Stop Recording, Stop & Discard (asks first), **Recent** with a submenu per meeting (Open Transcript,
    Rename…, Show in Finder, Copy Path, Cancel while it processes), Notes, Open Recordings Folder, Open Log, plus the
-   dictation, microphone, cleanup, Odin and Kumospace items. While a meeting records, a red dot and the clock show in
+   dictation, microphone, cleanup and Kumospace items. While a meeting records, a red dot and the clock show in
    the menu bar. The recorder panel and the Notes window are off by default; turn them on in the menu.
    The speech model (~1.6 GB) downloads on first use.
 4. macOS asks for three permissions. All are needed:

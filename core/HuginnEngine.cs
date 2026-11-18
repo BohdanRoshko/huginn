@@ -28,6 +28,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private Timer? _callTimer;
     private readonly CallDetector _calls = new();
     private string? _callRecording;  // the call app whose start began the current recording (it ends it too)
+    private string? _source;         // the app the current recording is from (Zoom, Kumospace, …); null = started by hand
     private string? _prompting;      // the call app the pop-up is asking about
     private int _callPolling;
     private Timer? _previewTimer;
@@ -504,6 +505,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             return;
         }
         _current = plan;
+        _source = null; // StartForCall / StartForKumo name the app right after this
         _timeline = SpeakerTimeline.Begin(plan.StartedLocal);
         _shell.SetTrayState(TrayState.Recording);
         SetStatus("● Recording meeting…");
@@ -528,8 +530,10 @@ internal sealed class HuginnEngine : IAsyncDisposable
         _p.Meeting.Stop();
         var cap = await _p.Meeting.FinalizeAsync();
         SaveTimeline(cap);
+        if (cap != null) MeetingProcessor.SaveSource(cap.Stamp, _source);
         _current = null;
         _callRecording = null;
+        _source = null;
 
         _meetingActive = false;
         _transcriber.KeepWarm = false;
@@ -561,7 +565,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private static void DeleteCapture(MeetingCapture? cap)
     {
         if (cap == null) return;
-        foreach (var path in new[] { cap.MicPath, cap.LoopPath, cap.NotesPath, SpeakerTimeline.PathFor(cap.Stamp) })
+        foreach (var path in new[] { cap.MicPath, cap.LoopPath, cap.NotesPath, SpeakerTimeline.PathFor(cap.Stamp), MeetingProcessor.SourcePathFor(cap.Stamp) })
         {
             try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
         }
@@ -763,6 +767,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         StartMeeting();
         if (!_p.Meeting.IsRecording) return;
         _callRecording = app;
+        _source = app;
         HuginnLog.Write($"calls: recording {app}");
         SetStatus($"● Recording · {app}");
     }
@@ -933,6 +938,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         StartMeeting();
         if (!_p.Meeting.IsRecording) return;
         _detector.OnAutoStarted(now);
+        _source = KumoSource;
         var zone = snap?.Zone is { Length: > 0 } z ? z : "outside a room";
         var people = string.Join(", ", snap?.Company.Select(p => p.Name) ?? Array.Empty<string>());
         HuginnLog.Write($"kumo: auto start ({reason}), {zone}, with {people}");

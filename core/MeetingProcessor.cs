@@ -66,8 +66,9 @@ internal static class MeetingProcessor
         all.Sort((a, b) => a.start.CompareTo(b.start));
         kept.Sort((a, b) => a.start.CompareTo(b.start));
 
-        var rawText = Format(all, cap.StartedLocal);
-        var reconciled = TranscriptReconciler.DeEcho(Format(kept, cap.StartedLocal));
+        var source = ReadSource(cap.Stamp);
+        var rawText = Format(all, cap.StartedLocal, source);
+        var reconciled = TranscriptReconciler.DeEcho(Format(kept, cap.StartedLocal, source));
         // De-echo needs the Me/Them labels, so the names from Kumospace go on after it.
         var timeline = SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp));
         var text = timeline == null ? reconciled.Text
@@ -127,10 +128,32 @@ internal static class MeetingProcessor
         return s.Length <= 80 ? s : s[..80].TrimEnd(' ', '.');
     }
 
-    private static string Format(List<(TimeSpan start, string speaker, string text)> segs, DateTime started)
+    /// <summary>The app a recording came from (Zoom, Kumospace, …), kept next to its WAVs until it is transcribed.</summary>
+    public static string SourcePathFor(string stamp) => Path.Combine(Paths.MeetingsDir(), $"{stamp}_source.txt");
+
+    public static void SaveSource(string stamp, string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source)) return;
+        try { File.WriteAllText(SourcePathFor(stamp), source.Trim(), new UTF8Encoding(false)); }
+        catch (Exception ex) { HuginnLog.Write($"meeting {stamp}: source not saved", ex); }
+    }
+
+    private static string? ReadSource(string stamp)
+    {
+        try
+        {
+            var path = SourcePathFor(stamp);
+            var s = File.Exists(path) ? File.ReadAllText(path).Trim() : "";
+            return s.Length > 0 ? s : null;
+        }
+        catch { return null; }
+    }
+
+    internal static string Format(List<(TimeSpan start, string speaker, string text)> segs, DateTime started, string? source = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# Meeting transcript — {started:yyyy-MM-dd HH:mm}");
+        if (source != null) sb.AppendLine($"# Source: {source}"); // Odin shows it as the meeting's source
         sb.AppendLine("# Tracks: Me (microphone) · Them (system audio — all remote participants, mixed)");
         sb.AppendLine();
         if (segs.Count == 0)

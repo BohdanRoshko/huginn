@@ -116,6 +116,8 @@ internal interface IShell
     void Refresh();
     /// <summary>The engine asks the app to exit (quit flag). The engine has already saved what it must.</summary>
     void Exit();
+    /// <summary>Opens this Odin note in Odin (Windows: the Odin desktop window; elsewhere the web page).</summary>
+    void OpenOdinNote(string slug);
 }
 
 /// <summary>The floating dictation pill.</summary>

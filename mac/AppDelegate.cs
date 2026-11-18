@@ -182,6 +182,10 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
     public void Exit() => MacUi.OnMain(Quit);
 
+    // No Odin window on the Mac: the note's page in the browser (only shown when settings.json names an Odin).
+    public void OpenOdinNote(string slug) =>
+        MacUi.OnMain(() => NSWorkspace.SharedWorkspace.OpenUrl(new NSUrl($"{Config.OdinBaseUrl}/?page=notes&note={Uri.EscapeDataString(slug)}")));
+
     // ---- menu ----
 
     private static NSCellStateValue On(bool on) => on ? NSCellStateValue.On : NSCellStateValue.Off;
@@ -274,6 +278,8 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         sub.AddItem(Item("Rename…", () => Rename(job)));
         var show = Item("Show in Finder", () => MacUi.Reveal(path)); show.Enabled = has; sub.AddItem(show);
         var copy = Item("Copy Path", () => MacUi.Copy(path)); copy.Enabled = has; sub.AddItem(copy);
+        if (_engine.HasOdin && !job.Cancelable && (job.OdinSlug != null || job.Title != null))
+            sub.AddItem(Item("Open in Odin", () => _ = _engine.OpenInOdinAsync(job.Id)));
         if (job.Cancelable)
         {
             sub.AddItem(NSMenuItem.SeparatorItem);

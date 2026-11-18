@@ -585,6 +585,25 @@ internal sealed class HuginnEngine : IAsyncDisposable
         MeetingNotes.Save(cur.NotesPath, cur.StartedLocal, _p.Notes.Snapshot());
     }
 
+    /// <summary>The "open in Odin" button on a filed row: opens its note in Odin. A row filed before Huginn kept the
+    /// slug finds it by its title first.</summary>
+    public async Task OpenInOdinAsync(int id)
+    {
+        if (!HasOdin) return;
+        var row = Recent.Find(id);
+        if (row == null) return;
+        var slug = row.OdinSlug;
+        if (slug == null && !string.IsNullOrWhiteSpace(row.Title))
+        {
+            try { slug = await OdinClient.FindMeetingSlugAsync(row.Title!); }
+            catch (Exception ex) { HuginnLog.Write("odin: note lookup failed", ex); }
+            if (slug != null) Recent.SetOdinSlug(id, slug);
+        }
+        if (slug == null) { SetStatus("Not found in Odin"); return; }
+        HuginnLog.Write($"odin: opening note {slug}");
+        _shell.OpenOdinNote(slug);
+    }
+
     /// <summary>The cancel button on an in-flight row: stop that job's transcription and Odin filing. The WAVs
     /// stay on disk; nothing is deleted.</summary>
     public void CancelJob(int id)
@@ -623,6 +642,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                     var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), notes, cts.Token);
                     HuginnLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
                     if (!string.IsNullOrWhiteSpace(odin.Title)) Recent.SetTitle(jobId, odin.Title);
+                    Recent.SetOdinSlug(jobId, odin.Slug);
                     Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
                     Ui(() => _p.Notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {odin.Title}"));
                 }

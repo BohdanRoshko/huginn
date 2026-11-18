@@ -77,6 +77,8 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _panel.RecordToggleRequested += _engine.ToggleMeeting;
         _panel.CancelRequested += _engine.CancelJob;
         _panel.DiscardRequested += _engine.Discard;
+        _panel.ShowOdin = _engine.HasOdin;
+        _panel.OpenInOdinRequested += id => _ = _engine.OpenInOdinAsync(id);
         // The notepad: the recorder's controls, beside it. NotesMode says when it shows: "always" (paired with the
         // recorder's show/hide), "record" (opens when a recording starts), or "off".
         _notes.RecordToggleRequested += _engine.ToggleMeeting;
@@ -151,6 +153,36 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
     });
 
     public void Exit() => RunOnUi(ExitApp);
+
+    // The Odin desktop window, started (or, when it is already open, poked) with --open-note; the web page when the
+    // window's shortcut cannot be found.
+    public void OpenOdinNote(string slug)
+    {
+        try
+        {
+            var lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Odin.lnk");
+            string? exe = null;
+            if (File.Exists(lnk))
+            {
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType != null)
+                {
+                    dynamic shell = Activator.CreateInstance(shellType)!;
+                    exe = (string)shell.CreateShortcut(lnk).TargetPath;
+                }
+            }
+            if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
+            {
+                var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe)! };
+                psi.ArgumentList.Add("--open-note");
+                psi.ArgumentList.Add(slug);
+                Process.Start(psi)?.Dispose();
+                return;
+            }
+            Process.Start(new ProcessStartInfo($"{Config.OdinBaseUrl}/?page=notes&note={Uri.EscapeDataString(slug)}") { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) { HuginnLog.Write("odin: could not open the note", ex); }
+    }
 
     // ---- menu ----
 

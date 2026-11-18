@@ -20,6 +20,8 @@ internal sealed class RecentMeeting
     public string? Transcript { get; set; }
     /// <summary>The user named it; Odin's title must not overwrite that.</summary>
     public bool Renamed { get; set; }
+    /// <summary>The Odin note this meeting was filed as (its slug), once filed. Only Bohdan has Odin.</summary>
+    public string? OdinSlug { get; set; }
 
     /// <summary>A finished row with a transcript gets the copy-path button in place of cancel.</summary>
     public bool CanCopy => !Cancelable && Transcript != null;
@@ -82,6 +84,8 @@ internal sealed class RecentMeetings
     });
 
     /// <summary>Records where the transcript landed. A name the user gave while it was in flight applies now.</summary>
+    public void SetOdinSlug(int id, string? slug) => Update(id, j => { if (!string.IsNullOrWhiteSpace(slug)) j.OdinSlug = slug; });
+
     public void SetTranscript(int id, string path) => Update(id, j =>
         j.Transcript = j.Renamed ? MeetingProcessor.RenameTranscript(path, j.Stamp, j.Title) : path);
 
@@ -141,7 +145,7 @@ internal sealed class RecentMeetings
 
     // ---- recent.json ----
     private sealed record EntryDto(string Stamp, string Started, string? Title, string Status, int Tone,
-        string? Transcript = null, bool Renamed = false);
+        string? Transcript = null, bool Renamed = false, string? OdinSlug = null);
 
     private void Save()
     {
@@ -151,7 +155,7 @@ internal sealed class RecentMeetings
             lock (_lock)
             {
                 var dto = _entries.Take(DisplayMax).Select(j =>
-                    new EntryDto(j.Stamp, j.Started.ToString("o"), j.Title, j.Status, (int)j.Tone, j.Transcript, j.Renamed)).ToList();
+                    new EntryDto(j.Stamp, j.Started.ToString("o"), j.Title, j.Status, (int)j.Tone, j.Transcript, j.Renamed, j.OdinSlug)).ToList();
                 json = JsonSerializer.Serialize(dto);
             }
         }
@@ -217,6 +221,7 @@ internal sealed class RecentMeetings
                         Cancelable = false,
                         Transcript = d.Transcript,
                         Renamed = d.Renamed,
+                        OdinSlug = d.OdinSlug,
                     });
                 }
                 catch { /* skip one bad row, keep the rest */ }

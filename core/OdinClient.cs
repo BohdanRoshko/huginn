@@ -37,6 +37,18 @@ internal static class OdinClient
             r.TryGetProperty("secondaryType", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() : null);
     }
 
+    /// <summary>The slug of the meeting note Odin filed under this title, for meetings filed before Huginn kept the
+    /// slug: Odin's note search, newest first, and the row whose title matches exactly. Null when none does.</summary>
+    public static async Task<string?> FindMeetingSlugAsync(string title, CancellationToken ct = default)
+    {
+        var url = $"{Config.OdinBaseUrl}/api/notes?type=meeting&limit=20&q={Uri.EscapeDataString(title)}";
+        var body = await Http.GetStringAsync(url, ct);
+        using var doc = JsonDocument.Parse(body);
+        foreach (var row in doc.RootElement.EnumerateArray())
+            if (string.Equals(Str(row, "title").Trim(), title.Trim(), StringComparison.OrdinalIgnoreCase)) return Str(row, "slug");
+        return null;
+    }
+
     private static string Str(JsonElement e, string p) =>
         e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 

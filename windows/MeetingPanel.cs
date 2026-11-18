@@ -31,6 +31,10 @@ internal sealed class MeetingPanel : Form, IRecorderView
     /// <summary>Raised when the user confirms the two-click discard (trash) while recording: stop AND
     /// delete the audio — no transcription, no filing.</summary>
     public event Action? DiscardRequested;
+    /// <summary>Raised with a row id when the user clicks "open in Odin" on a filed row.</summary>
+    public event Action<int>? OpenInOdinRequested;
+    /// <summary>Show the "open in Odin" button (only when settings.json names an Odin: Bohdan's machine).</summary>
+    public bool ShowOdin { get; set; }
 
     private bool _recording;
     private bool _discardArmed;
@@ -43,6 +47,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private Point _dragOrigin;
     private int _hoverCancelId = -1;
     private int _hoverCopyId = -1;
+    private int _hoverOdinId = -1;
     private int _copiedId = -1;             // the row whose path was just copied: its icon shows a check briefly
     private DateTime _copiedAt;
     private TextBox? _editor;              // inline rename box over a row's name line
@@ -272,7 +277,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
         bool cancelable = entry.Cancelable;
         bool copyable = CanCopy(entry);
-        int rightPad = cancelable || copyable ? 40 : 16;
+        bool odin = CanOpenOdin(entry);
+        int rightPad = odin ? 66 : cancelable || copyable ? 40 : 16;
         int nameW = Width - 34 - rightPad;
 
         // Line 1 = the meeting NAME (Odin note title) once known; the live status before that.
@@ -288,6 +294,31 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
         if (cancelable) DrawCancel(g, CancelRect(i), entry.Id == _hoverCancelId);
         else if (copyable) DrawCopy(g, CancelRect(i), entry.Id == _hoverCopyId, entry.Id == _copiedId);
+        if (odin) DrawOpenOdin(g, OdinRect(i), entry.Id == _hoverOdinId);
+    }
+
+    // A meeting Odin filed (it has the note's slug, or the title Odin gave it) can be opened there.
+    private bool CanOpenOdin(RecentMeeting e) => ShowOdin && !e.Cancelable && (e.OdinSlug != null || (e.Title != null && e.Tone == JobTone.Good));
+
+    private Rectangle OdinRect(int index) { var r = CancelRect(index); r.X -= 26; return r; }
+
+    // "Open in Odin": a rounded square with an arrow leaving its top-right corner.
+    private void DrawOpenOdin(Graphics g, Rectangle hit, bool hover)
+    {
+        if (hover)
+        {
+            using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
+            using var hp = Rounded(hit, 6);
+            g.FillPath(hb, hp);
+        }
+        float cx = hit.X + hit.Width / 2f, cy = hit.Y + hit.Height / 2f;
+        using var pen = new Pen(hover ? TitleCol : Muted, 1.3f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+        // the box, open at its top-right corner
+        g.DrawLines(pen, new[] { new PointF(cx - 0.5f, cy - 5f), new PointF(cx - 5f, cy - 5f), new PointF(cx - 5f, cy + 5f),
+            new PointF(cx + 5f, cy + 5f), new PointF(cx + 5f, cy + 0.5f) });
+        // the arrow
+        g.DrawLine(pen, cx - 1f, cy + 1f, cx + 5.5f, cy - 5.5f);
+        g.DrawLines(pen, new[] { new PointF(cx + 1.5f, cy - 5.5f), new PointF(cx + 5.5f, cy - 5.5f), new PointF(cx + 5.5f, cy - 1.5f) });
     }
 
     // A finished row with a transcript gets the copy-path button where an in-flight row has its ✕.
@@ -428,6 +459,11 @@ internal sealed class MeetingPanel : Form, IRecorderView
                 CopyPath(_entries[i]);
                 return;
             }
+            if (CanOpenOdin(_entries[i]) && OdinRect(i).Contains(e.Location))
+            {
+                OpenInOdinRequested?.Invoke(_entries[i].Id);
+                return;
+            }
         }
         _dragging = true;
         _dragMoved = false;
@@ -455,7 +491,16 @@ internal sealed class MeetingPanel : Form, IRecorderView
         int copyHover = -1;
         for (int i = 0; i < _entries.Count; i++)
             if (CanCopy(_entries[i]) && CancelRect(i).Contains(e.Location)) { copyHover = _entries[i].Id; break; }
-        if (copyHover != _hoverCopyId) { _hoverCopyId = copyHover; Cursor = copyHover == -1 ? Cursors.Default : Cursors.Hand; Invalidate(); }
+        int odinHover = -1;
+        for (int i = 0; i < _entries.Count; i++)
+            if (CanOpenOdin(_entries[i]) && OdinRect(i).Contains(e.Location)) { odinHover = _entries[i].Id; break; }
+        if (copyHover != _hoverCopyId || odinHover != _hoverOdinId)
+        {
+            _hoverCopyId = copyHover;
+            _hoverOdinId = odinHover;
+            Cursor = copyHover == -1 && odinHover == -1 ? Cursors.Default : Cursors.Hand;
+            Invalidate();
+        }
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -468,7 +513,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         base.OnMouseDoubleClick(e);
         if (e.Button != MouseButtons.Left) return;
         int row = RowAt(e.Location);
-        if (row < 0 || CancelRect(row).Contains(e.Location)) return;
+        if (row < 0 || CancelRect(row).Contains(e.Location) || OdinRect(row).Contains(e.Location)) return;
         _dragging = false; // the second mouse-down armed a drag; this is a rename, not a move
         BeginRename(_entries[row], row);
     }
@@ -477,7 +522,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     {
         base.OnMouseLeave(e);
         if (_dragging) return;
-        bool changed = _btnHover || _discardHover || _hoverCancelId != -1 || _hoverCopyId != -1;
+        bool changed = _btnHover || _discardHover || _hoverCancelId != -1 || _hoverCopyId != -1 || _hoverOdinId != -1;
+        _hoverOdinId = -1;
         _btnHover = false;
         _discardHover = false;
         _hoverCancelId = -1;

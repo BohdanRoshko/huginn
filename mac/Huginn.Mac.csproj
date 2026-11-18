@@ -30,7 +30,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- The cleanup LLM's native build for Apple Silicon (Metal). Whisper's comes with the core. -->
+    <!-- Whisper's native build: for a -macos target this package adds only the macOS libraries (Metal on arm64). -->
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <!-- The cleanup LLM's native build for Apple Silicon (Metal). -->
     <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.25.0" />
   </ItemGroup>
 

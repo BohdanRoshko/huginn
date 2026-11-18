@@ -24,8 +24,8 @@
     <!-- WAV read/write and resampling only: the managed part of NAudio, same on every OS. -->
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
     <PackageReference Include="Whisper.net" Version="1.9.1" />
-    <!-- CPU runtime for every OS; on Apple Silicon it is the Metal build. Windows adds the Vulkan runtime. -->
-    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <!-- No native runtime here: each app adds its own (Windows: Vulkan + CPU, Mac: the Metal build), or the Mac
+         bundle would get every OS's libraries and fail to sign them. -->
     <!-- The cleanup LLM. Each app adds its own backend (Vulkan on Windows, Metal on Mac). -->
     <PackageReference Include="LLamaSharp" Version="0.25.0" />
   </ItemGroup>

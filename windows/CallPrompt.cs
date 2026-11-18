@@ -19,7 +19,9 @@ internal sealed class CallPrompt : Form, ICallPrompt
     private const int ShowSeconds = 30;
     private const int Pad = 14;                 // room for the shadow around the pill
     private const int PillW = 460, PillH = 61;
-    private const int W = PillW + 2 * Pad, H = PillH + 2 * Pad;
+    private const int W = PillW + 2 * Pad, H = PillH + 2 * Pad;   // design size: everything below is laid out in it
+    private const float Scale = 0.85f;                              // drawn 15% smaller than Notion's (Bohdan, 2026-11-18)
+    private static readonly int SW = (int)Math.Ceiling(W * Scale), SH = (int)Math.Ceiling(H * Scale);
     private static readonly Rectangle Pill = new(Pad, Pad, PillW, PillH);
     private static readonly Rectangle Button = new(Pad + PillW - 15 - 176, Pad + 12, 176, 36);
     private static readonly Rectangle Arrow = new(Button.Right - 31, Button.Y, 31, Button.Height);
@@ -50,7 +52,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        Size = new Size(W, H);
+        Size = new Size(SW, SH);
         _timeout.Tick += (_, _) => { _timeout.Stop(); OptionChosen?.Invoke("not now"); };
         _tick.Tick += (_, _) => { if (Visible) Render(); };
         _menu.Items.Add("Not now", null, (_, _) => OptionChosen?.Invoke("not now"));
@@ -78,7 +80,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
         _hover = 0;
         // Top centre of the main screen, always (Bohdan's choice, 2026-11-18; not the screen with the active window).
         var screen = Screen.PrimaryScreen ?? Screen.AllScreens[0];
-        Location = new Point(screen.Bounds.Left + (screen.Bounds.Width - W) / 2, screen.Bounds.Top + 16 - Pad);
+        Location = new Point(screen.Bounds.Left + (screen.Bounds.Width - SW) / 2, screen.Bounds.Top + 16 - (int)(Pad * Scale));
         _shownAt = DateTime.Now;
         if (!Visible) Show();
         Render();
@@ -97,7 +99,8 @@ internal sealed class CallPrompt : Form, ICallPrompt
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
-        int h = Main.Contains(e.Location) ? 1 : Arrow.Contains(e.Location) ? 2 : 0;
+        var at = Design(e.Location);
+        int h = Main.Contains(at) ? 1 : Arrow.Contains(at) ? 2 : 0;
         Cursor = h == 0 ? Cursors.Default : Cursors.Hand;
         if (h != _hover) { _hover = h; Render(); }
     }
@@ -110,20 +113,22 @@ internal sealed class CallPrompt : Form, ICallPrompt
     protected override void OnMouseUp(MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
-        if (Main.Contains(e.Location)) StartRequested?.Invoke();
-        else if (Arrow.Contains(e.Location)) _menu.Show(this, new Point(Arrow.Left, Arrow.Bottom + 6));
+        var at = Design(e.Location);
+        if (Main.Contains(at)) StartRequested?.Invoke();
+        else if (Arrow.Contains(at)) _menu.Show(this, new Point((int)(Arrow.Left * Scale), (int)((Arrow.Bottom + 6) * Scale)));
     }
 
     // ---- drawing: a per-pixel-alpha layered window, so the rounded pill and its shadow have soft edges ----
 
     private void Render()
     {
-        using var bmp = new Bitmap(W, H, PixelFormat.Format32bppArgb);
+        using var bmp = new Bitmap(SW, SH, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             g.Clear(Color.Transparent);
+            g.ScaleTransform(Scale, Scale);
             Draw(g);
         }
         Push(bmp);
@@ -202,6 +207,9 @@ internal sealed class CallPrompt : Form, ICallPrompt
         }
     }
 
+    // A window point back in design units, for hit-testing the layout.
+    private static Point Design(Point p) => new((int)(p.X / Scale), (int)(p.Y / Scale));
+
     private static GraphicsPath Rounded(RectangleF r, float radius)
     {
         var p = new GraphicsPath();
@@ -222,7 +230,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
         IntPtr old = SelectObject(memDc, hBitmap);
         try
         {
-            var size = new SIZE { cx = W, cy = H };
+            var size = new SIZE { cx = SW, cy = SH };
             var src = new POINT { x = 0, y = 0 };
             var dst = new POINT { x = Left, y = Top };
             var blend = new BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = 255, AlphaFormat = 1 };

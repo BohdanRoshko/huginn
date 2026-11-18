@@ -119,7 +119,8 @@ internal sealed class MacMicUsers : IMicUsers
 /// screen, under the menu bar, with an icon tile, a title, a subtitle and a blue split button. Never takes focus.</summary>
 internal sealed class MacCallPrompt : ICallPrompt
 {
-    private const double W = 460, H = 61;
+    private const double W = 460, H = 61;   // design size: the view draws in it
+    private const double Scale = 0.85;       // shown 15% smaller than Notion's (Bohdan, 2026-11-18)
     private const int ShowSeconds = 30;
     private readonly NSPanel _panel;
     private readonly PromptView _view;
@@ -132,7 +133,7 @@ internal sealed class MacCallPrompt : ICallPrompt
 
     public MacCallPrompt()
     {
-        _panel = new NSPanel(new CGRect(0, 0, W, H), NSWindowStyle.Borderless | NSWindowStyle.NonactivatingPanel, NSBackingStore.Buffered, false)
+        _panel = new NSPanel(new CGRect(0, 0, W * Scale, H * Scale), NSWindowStyle.Borderless | NSWindowStyle.NonactivatingPanel, NSBackingStore.Buffered, false)
         {
             Level = NSWindowLevel.Floating,
             BackgroundColor = NSColor.Clear,
@@ -145,11 +146,13 @@ internal sealed class MacCallPrompt : ICallPrompt
         _menu.AddItem(new NSMenuItem("Not now", (_, _) => OptionChosen?.Invoke("not now")));
         _menu.AddItem(new NSMenuItem("Always Record Meetings Automatically", (_, _) => OptionChosen?.Invoke("auto")));
         _menu.AddItem(new NSMenuItem("Don't Ask Again", (_, _) => OptionChosen?.Invoke("off")));
-        _view = new PromptView(new CGRect(0, 0, W, H))
+        _view = new PromptView(new CGRect(0, 0, W * Scale, H * Scale))
         {
             OnStart = () => StartRequested?.Invoke(),
             OnArrow = point => _menu.PopUpMenu(null, point, _view),
         };
+        // Bounds in design units, frame 15% smaller: AppKit scales the drawing and the mouse points.
+        _view.SetBoundsSize(new CGSize(W, H));
         _panel.ContentView = _view;
     }
 
@@ -160,7 +163,7 @@ internal sealed class MacCallPrompt : ICallPrompt
         // The main screen (the one with the menu bar), always: NSScreen.MainScreen is the screen with the active window.
         var screen = NSScreen.Screens[0];
         var f = screen.VisibleFrame;
-        _panel.SetFrameOrigin(new CGPoint(f.X + (f.Width - W) / 2, f.Y + f.Height - H - 10));
+        _panel.SetFrameOrigin(new CGPoint(f.X + (f.Width - W * Scale) / 2, f.Y + f.Height - H * Scale - 10));
         _panel.OrderFrontRegardless();
         _view.ShownAt = DateTime.Now;
         _timeout?.Invalidate();

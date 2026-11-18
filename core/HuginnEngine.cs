@@ -530,8 +530,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         var cap = await EndMeetingAsync();
         DeleteCapture(cap);
         _p.Notes.Discarded();
-        SetStatus("Recording discarded");
-        _shell.Info("Huginn — recording discarded", "The meeting audio was deleted; nothing was transcribed or filed.");
+        SetStatus("Recording discarded"); // no notification: the user just asked for it
     }
 
     private static void DeleteCapture(MeetingCapture? cap)

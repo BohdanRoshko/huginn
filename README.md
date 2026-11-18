@@ -20,7 +20,6 @@ core/      Huginn.Core: every decision. Transcription, speech chunks, echo gates
 windows/   The Windows shell: WinForms tray app, NAudio capture (WaveIn mic, WASAPI loopback), keyboard hook, paste.
 mac/       The Mac shell: AppKit menu bar app, AVCaptureSession mic, ScreenCaptureKit system audio, CGEvent-tap key, paste.
 tests/     Tests for the core (xunit). They run on Windows and macOS in CI.
-mac-swift/ The previous Swift Mac app, kept building until the C# Mac app has replaced it.
 ```
 
 **The rule:** a feature goes into `core/`. If the same logic would have to be written in `windows/` and `mac/`, it
@@ -38,7 +37,7 @@ belongs in the core.
 | Auto-file meetings to Odin | Posts each transcript (and your notes) to Odin's `/api/meetings/process`. |
 | Auto-record Kumospace meetings | Starts when you are with someone and someone talks; stops 5 s after you are alone or after 3 min of quiet; deletes a chat with under 20 s of talk. |
 | Kumospace status / today | Who you are with; your Kumospace availability as a work timer, today and this week (Monday first). |
-| Recorder panel | The last 8 meetings: name (Odin's title or yours), time, status. ✕ cancels a job in flight; the copy icon copies the transcript path; double-click renames (the file follows); right-click opens or reveals it. |
+| Show recorder panel | A floating window: level meter, Record/Stop, and the last 8 meetings: name (Odin's title or yours), time, status. ✕ cancels a job in flight; the copy icon copies the transcript path; double-click renames (the file follows); right-click opens or reveals it. |
 | Notes window | A notepad for the meeting. Each line is stamped with the second you began it and saved as `{stamp}_notes.md`; Odin treats every line as a must-include. |
 
 The cancel key (Escape) drops a dictation in progress, even mid-transcription.
@@ -69,7 +68,12 @@ copied) and left a junction at the old path. The Mac app moves the Swift app's `
    `scripts\get-latest-build.ps1` on Windows), unzip it, drag **Huginn.app** into Applications.
 2. The app is ad-hoc signed, not notarized, so macOS blocks the first launch. Either open **System Settings → Privacy &
    Security** and click **Open Anyway**, or run once: `xattr -cr /Applications/Huginn.app`.
-3. Launch it. A waveform appears in the menu bar. The speech model (~1.6 GB) downloads on first use.
+3. Launch it. A waveform appears in the menu bar; Huginn is a menu bar app, as the Swift app was. The menu has
+   Start/Stop Recording, Stop & Discard (asks first), **Recent** with a submenu per meeting (Open Transcript,
+   Rename…, Show in Finder, Copy Path, Cancel while it processes), Notes, Open Recordings Folder, Open Log, plus the
+   dictation, microphone, cleanup, Odin and Kumospace items. While a meeting records, a red dot and the clock show in
+   the menu bar. The recorder panel and the Notes window are off by default; turn them on in the menu.
+   The speech model (~1.6 GB) downloads on first use.
 4. macOS asks for three permissions. All are needed:
    - **Microphone**: dictation and your side of a meeting.
    - **Screen & System Audio Recording**: the other side of a meeting (ScreenCaptureKit; no virtual audio driver).

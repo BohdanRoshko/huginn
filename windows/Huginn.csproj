@@ -16,18 +16,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="KumoProbe.js" LogicalName="Huginn.KumoProbe.js" />
+    <ProjectReference Include="..\core\Huginn.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Windows capture: WaveIn mic and WASAPI loopback. -->
     <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="Whisper.net" Version="1.9.1" />
-    <!-- GPU on your RTX 5080 via Vulkan — needs only the NVIDIA driver, no CUDA Toolkit. -->
+    <!-- GPU on the RTX 5080 via Vulkan: needs only the NVIDIA driver, no CUDA Toolkit. The core brings the CPU runtime. -->
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
-    <!-- CPU fallback runtime. -->
-    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
     <!-- In-process cleanup LLM on Vulkan (runs inside Huginn; dies with the app). -->
-    <PackageReference Include="LLamaSharp" Version="0.25.0" />
     <PackageReference Include="LLamaSharp.Backend.Vulkan" Version="0.25.0" />
   </ItemGroup>
 

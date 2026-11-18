@@ -19,7 +19,7 @@ namespace Huginn;
 /// the app you're typing into stays focused and the Ctrl+V paste lands in the right place. FIXED window size —
 /// appearance is animated via the layer's alpha + window position + painted content, never by resizing.
 /// </summary>
-internal sealed class RecordingOverlay : Form
+internal sealed class RecordingOverlay : Form, IDictationOverlay
 {
     private enum State { Hidden, Starting, Listening, Transcribing, Cleaning }
 

@@ -6,7 +6,6 @@ using System.Windows.Forms;
 namespace Huginn;
 
 /// <summary>Dot/severity of a recording row.</summary>
-internal enum JobTone { Busy, Good, Warn, Bad, Muted }
 
 /// <summary>
 /// A compact, Notion-styled meeting-recorder control for a spare / 3rd monitor. Top row = icon ·
@@ -24,7 +23,7 @@ internal enum JobTone { Busy, Good, Warn, Bad, Muted }
 /// transcript file takes that name (<see cref="MeetingProcessor.RenameTranscript"/>) and Odin's title no longer
 /// overwrites it. Drag to move; right-click outside the rows to hide.
 /// </summary>
-internal sealed class MeetingPanel : Form
+internal sealed class MeetingPanel : Form, IRecorderView
 {
     public event Action? RecordToggleRequested;
     /// <summary>Raised with a job id when the user clicks ✕ on an in-flight row.</summary>
@@ -50,28 +49,10 @@ internal sealed class MeetingPanel : Form
     private int _editingId = -1;
     private ContextMenuStrip? _rowMenu;
 
-    private sealed class Entry
-    {
-        public int Id;
-        public string Stamp = "";
-        public DateTime Started;
-        public string? Title;                 // the Odin note name, set once filed
-        public string Status = "Transcribing…";
-        public JobTone Tone = JobTone.Busy;
-        public bool Cancelable = true;        // true only while transcribing / filing
-        public string? Transcript;            // the transcript file, once written (null while transcribing)
-        public bool Renamed;                  // the user named it; Odin's title must not overwrite
-    }
-
-    private const int DisplayMax = 8;
-    private readonly List<Entry> _entries = new();   // newest first
-    private int _nextJobId;
-
-    // recent.json is written OFF the UI thread (the snapshot is built on it). A monotonic seq lets the
-    // newest snapshot win so out-of-order background writes can't persist stale state.
-    private long _saveSeq;
-    private string? _pendingJson;
-    private readonly object _saveLock = new();
+    private const int DisplayMax = RecentMeetings.DisplayMax;
+    private readonly RecentMeetings _recent;
+    // A snapshot of the rows; the engine changes the list, the panel only draws and hit-tests it.
+    private List<RecentMeeting> _entries = new();
 
     private readonly float[] _wave;
     private float _incoming;
@@ -105,8 +86,11 @@ internal sealed class MeetingPanel : Form
     private const int RowH = 38;       // original recent-row height (the header, not the rows, was trimmed)
     private const int BottomPad = 8;
 
-    public MeetingPanel()
+    public MeetingPanel(RecentMeetings recent)
     {
+        _recent = recent;
+        _entries = recent.Entries.ToList();
+        _recent.Changed += () => Ui(() => { _entries = _recent.Entries.ToList(); RecalcHeight(); Invalidate(); });
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
@@ -117,7 +101,6 @@ internal sealed class MeetingPanel : Form
 
         _wave = new float[Math.Max(8, (Width - 32) / 6)];
 
-        LoadRecent();
         RecalcHeight();
         ApplyRegion();
 
@@ -144,68 +127,11 @@ internal sealed class MeetingPanel : Form
     public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; Invalidate(); });
     public void ShowRecording(DateTime startedLocal) => Ui(() => { _recording = true; _discardArmed = false; _startedLocal = startedLocal; Array.Clear(_wave); _incoming = 0; if (!Visible) { RestorePosition(); Show(); } Invalidate(); });
 
-    /// <summary>Add a recording row on top (newest first) for a finished capture; returns its id. Starts as
-    /// a cancelable "Transcribing…". Older rows beyond <see cref="DisplayMax"/> drop off the list.</summary>
-    public int AddJob(string stamp, DateTime started)
-    {
-        int id = System.Threading.Interlocked.Increment(ref _nextJobId);
-        Ui(() =>
-        {
-            _entries.Insert(0, new Entry { Id = id, Stamp = stamp, Started = started });
-            Trim();
-            SaveRecent();
-            RecalcHeight();
-        });
-        return id;
-    }
-
-    public void SetJobStatus(int id, string status, JobTone tone, bool cancelable) => Ui(() =>
-    {
-        var j = _entries.Find(x => x.Id == id);
-        if (j == null) return;
-        j.Status = status; j.Tone = tone; j.Cancelable = cancelable;
-        SaveRecent();
-        Invalidate();
-    });
-
-    /// <summary>Name the recording (the Odin note title) once it's been filed. A name the user typed wins.</summary>
-    public void SetJobTitle(int id, string? title) => Ui(() =>
-    {
-        var j = _entries.Find(x => x.Id == id);
-        if (j == null || j.Renamed || string.IsNullOrWhiteSpace(title)) return;
-        j.Title = title.Trim();
-        SaveRecent();
-        Invalidate();
-    });
-
-    /// <summary>Record where the transcript landed. If the user renamed the row while it was still in flight,
-    /// the file takes that name now.</summary>
-    public void SetJobTranscript(int id, string path) => Ui(() =>
-    {
-        var j = _entries.Find(x => x.Id == id);
-        if (j == null) return;
-        j.Transcript = j.Renamed ? MeetingProcessor.RenameTranscript(path, j.Stamp, j.Title) : path;
-        SaveRecent();
-    });
-
     /// <summary>Push a live input level (0..1) into the meter. Thread-safe (single float write).</summary>
     public void SetLevel(float level01)
     {
         float v = Math.Clamp((float)Math.Sqrt(Math.Max(0f, level01)) * 1.6f, 0f, 1f);
         if (v > _incoming) _incoming = v;
-    }
-
-    private void Trim()
-    {
-        while (_entries.Count > DisplayMax)
-        {
-            // Drop the OLDEST finished row; never strand an in-flight row (and its ✕ cancel handle) when a
-            // completed row could go instead. Only drop a still-cancelable row if every row is in-flight.
-            int drop = _entries.Count - 1;
-            for (int i = _entries.Count - 1; i >= 0; i--)
-                if (!_entries[i].Cancelable) { drop = i; break; }
-            _entries.RemoveAt(drop);
-        }
     }
 
     private void OnTick(object? sender, EventArgs e)
@@ -339,7 +265,7 @@ internal sealed class MeetingPanel : Form
         }
     }
 
-    private void DrawEntryRow(Graphics g, Entry entry, int i, int top)
+    private void DrawEntryRow(Graphics g, RecentMeeting entry, int i, int top)
     {
         using (var d = new SolidBrush(ToneColor(entry.Tone)))
             g.FillEllipse(d, 19, top + 15, 7, 7);
@@ -365,7 +291,7 @@ internal sealed class MeetingPanel : Form
     }
 
     // A finished row with a transcript gets the copy-path button where an in-flight row has its ✕.
-    private static bool CanCopy(Entry e) => !e.Cancelable && e.Transcript != null;
+    private static bool CanCopy(RecentMeeting e) => !e.Cancelable && e.Transcript != null;
 
     // The copy icon: two overlapping rounded squares. Right after a copy it shows a check instead.
     private void DrawCopy(Graphics g, Rectangle hit, bool hover, bool copied)
@@ -394,7 +320,7 @@ internal sealed class MeetingPanel : Form
         }
     }
 
-    private void CopyPath(Entry entry)
+    private void CopyPath(RecentMeeting entry)
     {
         var path = ResolveTranscript(entry);
         if (!File.Exists(path)) return;
@@ -560,15 +486,6 @@ internal sealed class MeetingPanel : Form
         if (changed) Invalidate();
     }
 
-    /// <summary>The CURRENT transcript path of a recording (it moves on rename), or null when none exists yet.</summary>
-    public string? TranscriptPathFor(string stamp)
-    {
-        var e = _entries.Find(x => x.Stamp == stamp);
-        if (e == null) return null;
-        var path = ResolveTranscript(e);
-        return File.Exists(path) ? path : null;
-    }
-
     // ---- rename (double-click a row, or right-click → Rename) ----
     private int RowAt(Point p)
     {
@@ -577,9 +494,9 @@ internal sealed class MeetingPanel : Form
         return i < _entries.Count ? i : -1;
     }
 
-    private static string ResolveTranscript(Entry e) => e.Transcript ?? MeetingProcessor.TranscriptPathFor(e.Stamp, null);
+    private static string ResolveTranscript(RecentMeeting e) => RecentMeetings.ResolveTranscript(e);
 
-    private void ShowRowMenu(Entry entry, Point at)
+    private void ShowRowMenu(RecentMeeting entry, Point at)
     {
         _rowMenu?.Dispose();
         _rowMenu = new ContextMenuStrip();
@@ -606,7 +523,7 @@ internal sealed class MeetingPanel : Form
         catch { /* non-fatal */ }
     }
 
-    private void BeginRename(Entry entry, int row)
+    private void BeginRename(RecentMeeting entry, int row)
     {
         CancelRename();
         if (row < 0) return;
@@ -641,15 +558,9 @@ internal sealed class MeetingPanel : Form
         var box = _editor;
         if (box == null) return;
         var text = box.Text.Trim();
-        var entry = _entries.Find(x => x.Id == _editingId);
+        var id = _editingId;
         RemoveEditor();
-        if (entry == null || text.Length == 0 || text == entry.Title) return;
-        entry.Title = text;
-        entry.Renamed = true;
-        var current = ResolveTranscript(entry);
-        if (File.Exists(current)) entry.Transcript = MeetingProcessor.RenameTranscript(current, entry.Stamp, text);
-        SaveRecent();
-        Invalidate();
+        if (text.Length > 0) _recent.Rename(id, text);
     }
 
     private void CancelRename() => RemoveEditor();
@@ -664,88 +575,8 @@ internal sealed class MeetingPanel : Form
         box.Dispose();
     }
 
-    // ---- recent-recordings persistence (so the last 5 survive a restart) ----
-    private sealed record EntryDto(string Stamp, string Started, string? Title, string Status, int Tone,
-        string? Transcript = null, bool Renamed = false);
-
-    private static string RecentFile => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "Meetings", "recent.json");
-
-    private void SaveRecent()
-    {
-        string json;
-        try
-        {
-            // Snapshot on the UI thread (reads _entries); only the file write moves off-thread.
-            var dto = _entries.Take(DisplayMax).Select(j =>
-                new EntryDto(j.Stamp, j.Started.ToString("o"), j.Title, j.Status, (int)j.Tone, j.Transcript, j.Renamed)).ToList();
-            json = JsonSerializer.Serialize(dto);
-        }
-        catch { return; }
-
-        long mySeq;
-        lock (_saveLock) { mySeq = ++_saveSeq; _pendingJson = json; }
-        _ = Task.Run(() => FlushRecent(mySeq));
-    }
-
-    private void FlushRecent(long seq)
-    {
-        // The whole flush is under _saveLock, so writes serialize; a superseded snapshot bails.
-        lock (_saveLock)
-        {
-            if (seq != _saveSeq || _pendingJson is null) return;
-            var json = _pendingJson;
-            _pendingJson = null;
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(RecentFile)!);
-                File.WriteAllText(RecentFile, json);
-            }
-            catch { /* non-fatal */ }
-        }
-    }
-
-    private void LoadRecent()
-    {
-        try
-        {
-            if (!File.Exists(RecentFile)) return;
-            var dto = JsonSerializer.Deserialize<List<EntryDto>>(File.ReadAllText(RecentFile));
-            if (dto == null) return;
-            foreach (var d in dto.Take(DisplayMax))
-            {
-                try
-                {
-                    if (!DateTime.TryParse(d.Started, null, System.Globalization.DateTimeStyles.RoundtripKind, out var started))
-                        started = DateTime.Now;
-                    // A row left mid-processing at the last shutdown has no live job behind it — show it as
-                    // interrupted rather than a fake in-flight one (no cancel handle exists for it).
-                    var status = d.Status ?? "";
-                    bool inFlight = status.EndsWith("…");
-                    var tone = inFlight ? JobTone.Muted
-                        : (Enum.IsDefined(typeof(JobTone), d.Tone) ? (JobTone)d.Tone : JobTone.Muted);
-                    _entries.Add(new Entry
-                    {
-                        Id = System.Threading.Interlocked.Increment(ref _nextJobId),
-                        Stamp = d.Stamp ?? "",
-                        Started = started,
-                        Title = d.Title,
-                        Status = inFlight ? "Interrupted" : (status.Length == 0 ? "Saved" : status),
-                        Tone = tone,
-                        Cancelable = false,
-                        Transcript = d.Transcript,
-                        Renamed = d.Renamed,
-                    });
-                }
-                catch { /* skip one bad row, keep the rest */ }
-            }
-        }
-        catch { _entries.Clear(); }
-    }
-
     // ---- position persistence (defaults to the 3rd monitor) ----
-    private static string PosFile => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "meeting_panel_pos.txt");
+    private static string PosFile => Paths.File("meeting_panel_pos.txt");
 
     private void SavePosition()
     {

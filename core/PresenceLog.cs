@@ -80,4 +80,22 @@ internal sealed class PresenceLog
             if (totals.TryGetValue(s, out var t) && t >= TimeSpan.FromMinutes(1)) parts.Add($"{Format(t)} {s}");
         return parts.Count == 0 ? "nothing yet" : string.Join(" · ", parts);
     }
+
+    /// <summary>The week of <paramref name="now"/>, Monday to Sunday like a calendar, one menu line per day: each day
+    /// by its date, today as "Today", future and empty past days "—", with away time too.</summary>
+    public static IReadOnlyList<string> Week(string dir, DateTime now)
+    {
+        var today = now.Date;
+        var monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+        var list = new List<string>();
+        for (int i = 0; i < 7; i++)
+        {
+            var day = monday.AddDays(i);
+            var label = day == today ? "Today" : day.ToString("ddd d MMM", CultureInfo.InvariantCulture);
+            var text = day > today ? "—" : Describe(Totals(dir, day, now), withAway: true);
+            if (day < today && text == "nothing yet") text = "—";
+            list.Add($"{label}:  {text}");
+        }
+        return list;
+    }
 }

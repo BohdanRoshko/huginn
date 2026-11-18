@@ -7,7 +7,7 @@ namespace Huginn;
 /// Drops transcribed text at the cursor by setting the clipboard and sending Ctrl+V,
 /// then restoring the previous clipboard. Clipboard access is marshaled to the STA UI thread.
 /// </summary>
-internal sealed class TextInjector
+internal sealed class TextInjector : ITextInjector
 {
     private readonly Control _uiMarshal;
 

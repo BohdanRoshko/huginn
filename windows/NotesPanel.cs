@@ -19,7 +19,7 @@ namespace Huginn;
 /// the status line follows the job (Transcribing… → Filing to Odin… → the result); once the transcript
 /// exists, <b>Open transcript</b> / <b>Copy path</b> appear in the footer until the next recording starts.
 /// </summary>
-internal sealed class NotesPanel : Form
+internal sealed class NotesPanel : Form, INotesView
 {
     public event Action? RecordToggleRequested;
     /// <summary>The two-click discard confirmed (trash while recording): stop AND delete, nothing filed.</summary>
@@ -33,7 +33,7 @@ internal sealed class NotesPanel : Form
     public Func<string, string?>? TranscriptResolver { get; set; }
 
     private readonly TextBox _pad;
-    private readonly List<TimeSpan> _lineStamps = new();   // one per logical line of the pad, in order
+    private readonly LineStamps _lineStamps = new();   // one per logical line of the pad, in order
     private bool _recording;
     private DateTime _startedLocal;
     private bool _btnHover, _discardHover, _discardArmed;
@@ -159,7 +159,7 @@ internal sealed class NotesPanel : Form
         _status = "";
         _hasTranscript = false;
         _toast = null;
-        for (int i = 0; i < _lineStamps.Count; i++) _lineStamps[i] = TimeSpan.Zero;
+        _lineStamps.ZeroAll();
         LayoutPad();
         if (!Visible) { RestorePosition(); Show(); }
         Invalidate();
@@ -212,18 +212,7 @@ internal sealed class NotesPanel : Form
     });
 
     /// <summary>The pad's non-empty lines with the stamp each was begun at. UI thread only.</summary>
-    public IReadOnlyList<(TimeSpan at, string text)> Snapshot()
-    {
-        var lines = _pad.Text.Split('\n');
-        var list = new List<(TimeSpan, string)>();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var text = lines[i].TrimEnd('\r').Trim();
-            if (text.Length == 0) continue;
-            list.Add((i < _lineStamps.Count ? _lineStamps[i] : Now(), text));
-        }
-        return list;
-    }
+    public IReadOnlyList<(TimeSpan at, string text)> Snapshot() => _lineStamps.Snapshot(_pad.Text, Now());
 
     private void ClearPad()
     {
@@ -240,32 +229,11 @@ internal sealed class NotesPanel : Form
     {
         if (_suppressTextChanged) return;
         _stale = false; // the user is working on this text; Record keeps it
-        var text = _pad.Text;
-        int n = text.Length == 0 ? 0 : CountNewlines(text, text.Length) + 1;
-        int caretLine = CountNewlines(text, Math.Min(_pad.SelectionStart, text.Length));
-        if (n > _lineStamps.Count)
-        {
-            int add = n - _lineStamps.Count;
-            int at = Math.Clamp(caretLine - add + 1, 0, _lineStamps.Count);
-            var now = Now();
-            for (int k = 0; k < add; k++) _lineStamps.Insert(at, now);
-        }
-        else if (n < _lineStamps.Count)
-        {
-            int remove = _lineStamps.Count - n;
-            int at = Math.Clamp(caretLine + 1, 0, _lineStamps.Count - remove);
-            _lineStamps.RemoveRange(at, remove);
-        }
+        _lineStamps.TextChanged(_pad.Text, _pad.SelectionStart, Now());
         _save.Stop();
         _save.Start();
     }
 
-    private static int CountNewlines(string s, int upTo)
-    {
-        int c = 0;
-        for (int i = 0; i < upTo; i++) if (s[i] == '\n') c++;
-        return c;
-    }
 
     private void UpdateHideActions()
     {
@@ -484,8 +452,7 @@ internal sealed class NotesPanel : Form
     }
 
     // ---- position persistence (defaults to beside the recorder) ----
-    private static string PosFile => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "notes_panel_pos.txt");
+    private static string PosFile => Paths.File("notes_panel_pos.txt");
 
     private void SavePosition()
     {

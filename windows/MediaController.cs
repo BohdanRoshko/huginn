@@ -8,7 +8,7 @@ namespace Huginn;
 /// only touches what's actually playing — it never starts playback. A gate serialises pause/resume
 /// so a quick press never leaves media stuck paused.
 /// </summary>
-internal sealed class MediaController
+internal sealed class MediaController : IMediaControl
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly List<GlobalSystemMediaTransportControlsSession> _paused = new();

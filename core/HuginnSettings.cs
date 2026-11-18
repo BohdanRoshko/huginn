@@ -3,17 +3,19 @@ using System.Text.Json;
 namespace Huginn;
 
 /// <summary>
-/// Huginn's load-once configuration, read from %LOCALAPPDATA%\Huginn\settings.json (created with defaults on
-/// first run). Replaces the old compile-time <see cref="Config"/> consts so these knobs are editable without
-/// recompiling — the enabler for a future settings UI. Read ONCE at startup; edit the file and relaunch to
-/// apply. (Runtime tray toggles — cleanup, meeting auto-file, panel visibility, microphone — still persist to
-/// their own small files via <see cref="Settings"/> / <see cref="MicSettings"/>; unifying those into this file
-/// is a Phase-3 follow-up.) Never throws — a missing or malformed file falls back to defaults.
+/// Huginn's load-once configuration, read from settings.json in the data folder (created with defaults on first
+/// run). Read ONCE at startup; edit the file and relaunch to apply. The tray / menu bar switches persist to their
+/// own small files via <see cref="Settings"/>. Never throws: a missing or malformed file falls back to defaults.
 /// </summary>
 internal sealed class HuginnSettings
 {
     public HotkeySettings Hotkey { get; set; } = new();
     public int CancelVk { get; set; } = 0x1B; // key that cancels a dictation (default Escape 0x1B); map a mouse button to it in your mouse software
+    // Mac push-to-talk: a virtual key code held down (61 = Right Option; Ctrl+Space switches input sources on a Mac),
+    // plus modifier flags that must be held with it (1 Control, 2 Option, 4 Command, 8 Shift; 0 = none).
+    public int MacHotkeyKeyCode { get; set; } = 61;
+    public int MacHotkeyModifiers { get; set; } = 0;
+    public int MacCancelKeyCode { get; set; } = 53; // Escape
     public string Language { get; set; } = "en";
     public bool ShowOverlay { get; set; } = true;
     public bool ShowMeetingOverlay { get; set; } = false;
@@ -33,8 +35,7 @@ internal sealed class HuginnSettings
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    private static string FilePath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "settings.json");
+    private static string FilePath() => Paths.File("settings.json");
 
     /// <summary>The single loaded instance, read at startup.</summary>
     public static HuginnSettings Current { get; } = Load();

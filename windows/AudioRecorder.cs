@@ -8,12 +8,19 @@ namespace Huginn;
 /// push-to-talk key is held. On stop it raises <see cref="RecordingComplete"/> with an
 /// in-memory WAV stream, on a background thread.
 /// </summary>
-internal sealed class AudioRecorder : IDisposable
+internal sealed class AudioRecorder : IDictationRecorder
 {
     private static readonly WaveFormat Format = new(16000, 16, 1);
 
     /// <summary>-1 = Windows default recording device (WAVE_MAPPER); otherwise a WaveIn device index.</summary>
     public int DeviceNumber { get; set; } = -1;
+
+    /// <summary>The WaveIn index as text; "" = the Windows default.</summary>
+    public string Device
+    {
+        get => DeviceNumber < 0 ? "" : DeviceNumber.ToString();
+        set => DeviceNumber = int.TryParse(value, out var n) ? n : -1;
+    }
 
     // Peak 16-bit amplitude below this = a dead/muted mic (essentially digital silence). This is now only a
     // fast "is the mic alive?" pre-check — the real speech-vs-silence decision is the Silero VAD in the
@@ -82,7 +89,7 @@ internal sealed class AudioRecorder : IDisposable
     /// <paramref name="maxSeconds"/> &gt; 0, only the LAST that-many seconds are returned — so a long recording's
     /// preview stays constant-cost (re-transcribing the whole growing clip each tick was O(n²) and stuttered the
     /// UI). The authoritative final pass still transcribes the full clip.</summary>
-    public MemoryStream? SnapshotWav(int maxSeconds = 0)
+    public MemoryStream? SnapshotWav(int maxSeconds)
     {
         byte[] pcm;
         lock (_pcmLock)

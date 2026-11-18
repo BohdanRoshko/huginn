@@ -193,10 +193,12 @@ internal static class MeetingProcessor
     /// The mic track is already 16 kHz mono so this is a near no-op for it.</summary>
     private static MemoryStream OpenAsWhisperWav(string path)
     {
-        using var reader = new AudioFileReader(path);
+        // WaveFileReader, not AudioFileReader: the tracks are always WAV, and AudioFileReader is Windows-only.
+        using var reader = new WaveFileReader(path);
+        var samples = reader.ToSampleProvider();
         ISampleProvider mono = reader.WaveFormat.Channels > 1
-            ? new StereoToMonoSampleProvider(reader) { LeftVolume = 0.5f, RightVolume = 0.5f }
-            : reader;
+            ? new StereoToMonoSampleProvider(samples) { LeftVolume = 0.5f, RightVolume = 0.5f }
+            : samples;
         ISampleProvider at16k = reader.WaveFormat.SampleRate == 16000
             ? mono
             : new WdlResamplingSampleProvider(mono, 16000);

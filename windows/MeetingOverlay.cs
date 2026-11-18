@@ -10,7 +10,7 @@ namespace Huginn;
 /// meeting-recording consent). Like <see cref="RecordingOverlay"/> it NEVER takes keyboard focus, so it
 /// can't interfere with the call window. Flips to "Transcribing…" after Stop.
 /// </summary>
-internal sealed class MeetingOverlay : Form
+internal sealed class MeetingOverlay : Form, IMeetingIndicator
 {
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 500 };
     private readonly Font _font = new("Segoe UI Semibold", 10.5f);
@@ -74,6 +74,8 @@ internal sealed class MeetingOverlay : Form
         _pulse = 1f;
         Invalidate();
     }
+
+    void IMeetingIndicator.HideIndicator() => HideOverlay();
 
     public void HideOverlay()
     {

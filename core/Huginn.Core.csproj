@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything Huginn does that is not UI or OS capture: transcription, speech chunks, echo gates, de-echo,
+       the Kumospace watcher, speaker names, the work timer, Odin filing, settings, the log and the app's
+       state machine (HuginnEngine). The Windows and Mac apps are thin shells over this library. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Huginn</RootNamespace>
+    <AssemblyName>Huginn.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Huginn" />
+    <InternalsVisibleTo Include="Huginn.Core.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="KumoProbe.js" LogicalName="Huginn.KumoProbe.js" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WAV read/write and resampling only: the managed part of NAudio, same on every OS. -->
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <!-- CPU runtime for every OS; on Apple Silicon it is the Metal build. Windows adds the Vulkan runtime. -->
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <!-- The cleanup LLM. Each app adds its own backend (Vulkan on Windows, Metal on Mac). -->
+    <PackageReference Include="LLamaSharp" Version="0.25.0" />
+  </ItemGroup>
+
+</Project>

@@ -15,8 +15,7 @@ internal static class Dictionary
         "OAuth", "Bohdan",
     };
 
-    private static string FilePath() => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Huginn", "dictionary.txt");
+    private static string FilePath() => Paths.File("dictionary.txt");
 
     /// <summary>Terms from the file (seeded with defaults if the file is absent or empty).</summary>
     public static IReadOnlyList<string> Terms()

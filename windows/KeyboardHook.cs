@@ -9,7 +9,7 @@ namespace Huginn;
 /// set). <see cref="KeyDown"/> fires when the chord engages, <see cref="KeyUp"/> when it releases.
 /// Both run on the UI thread, so handlers must be quick.
 /// </summary>
-internal sealed class KeyboardHook : IDisposable
+internal sealed class KeyboardHook : IHotkey
 {
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYDOWN = 0x0100;
@@ -37,6 +37,18 @@ internal sealed class KeyboardHook : IDisposable
     /// even when injected by mouse/remap software) and fires <see cref="CancelRequested"/>; otherwise it passes
     /// through untouched, so the cancel key works normally everywhere else.</summary>
     public bool CancelArmed { get => _cancelArmed; set => _cancelArmed = value; }
+
+    /// <summary>The chord as the menu shows it, e.g. "Left Ctrl + Space".</summary>
+    public string Name => _modVk == 0 ? KeyName(_mainVk) : $"{KeyName(_modVk)} + {KeyName(_mainVk)}";
+
+    private static string KeyName(int vk) => vk switch
+    {
+        0xA3 => "Right Ctrl",
+        0xA2 => "Left Ctrl",
+        0x20 => "Space",
+        0x77 => "F8",
+        _ => $"key 0x{vk:X2}",
+    };
 
     public KeyboardHook(int mainVk, int modifierVk, bool swallow, int cancelVk)
     {

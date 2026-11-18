@@ -1,11 +1,6 @@
-using System.Globalization;
 using NAudio.Wave;
 
 namespace Huginn;
-
-/// <summary>A finished capture, snapshotted so the recorder is immediately free to record again while
-/// this one is transcribed/filed in the background.</summary>
-internal sealed record MeetingCapture(string Stamp, string MicPath, string LoopPath, string NotesPath, DateTime StartedLocal);
 
 /// <summary>
 /// Records a meeting as TWO tracks (the SKILL's free-diarization win): the microphone is "Me" and a
@@ -15,12 +10,19 @@ internal sealed record MeetingCapture(string Stamp, string MicPath, string LoopP
 /// transcription/filing happens OUTSIDE this class (<see cref="MeetingProcessor"/>) so recording is never
 /// blocked by processing. Separate from the dictation hot path; only shares the <see cref="Transcriber"/>.
 /// </summary>
-internal sealed class MeetingRecorder : IDisposable
+internal sealed class MeetingRecorder : IMeetingRecorder
 {
     private static readonly WaveFormat WhisperFormat = new(16000, 16, 1); // what Whisper wants
 
     /// <summary>-1 = Windows default recording device; otherwise a WaveIn device index (shared with dictation).</summary>
     public int MicDeviceNumber { get; set; } = -1;
+
+    /// <summary>The WaveIn index as text; "" = the Windows default.</summary>
+    public string Device
+    {
+        get => MicDeviceNumber < 0 ? "" : MicDeviceNumber.ToString();
+        set => MicDeviceNumber = int.TryParse(value, out var n) ? n : -1;
+    }
 
     private readonly object _lock = new();
     private WaveInEvent? _mic;
@@ -29,31 +31,24 @@ internal sealed class MeetingRecorder : IDisposable
     private WaveFileWriter? _loopWriter;
     private TaskCompletionSource _micStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource _loopStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private string _micPath = "", _loopPath = "", _notesPath = "", _stamp = "";
+    private string _micPath = "", _loopPath = "";
     private volatile bool _recording;
 
     public bool IsRecording => _recording;
-    public DateTime StartedLocal { get; private set; }
+    private MeetingCapture? _plan;
 
-    /// <summary>Where the notes typed during THIS recording go (<see cref="MeetingNotes"/>): `{stamp}_notes.md`
-    /// next to the WAV tracks. The recorder never writes it; the panel's note lines are appended by the app.</summary>
-    public string NotesPath => _notesPath;
 
     /// <summary>Live combined input level 0..1 (max of mic + system audio per buffer) — drives the panel's
     /// voice-level meter. Raised from the capture threads.</summary>
     public event Action<float>? LevelChanged;
 
-    public void Start()
+    public void Start(MeetingCapture plan)
     {
         if (_recording) return;
 
-        var dir = Paths.MeetingsDir();
-        Directory.CreateDirectory(dir);
-        StartedLocal = DateTime.Now;
-        _stamp = StartedLocal.ToString("yyyy-MM-dd_HHmmss", CultureInfo.InvariantCulture);
-        _micPath = Path.Combine(dir, $"{_stamp}_me.wav");
-        _loopPath = Path.Combine(dir, $"{_stamp}_them.wav");
-        _notesPath = Path.Combine(dir, $"{_stamp}_notes.md");
+        _plan = plan;
+        _micPath = plan.MicPath;
+        _loopPath = plan.LoopPath;
         _micStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _loopStopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -149,7 +144,7 @@ internal sealed class MeetingRecorder : IDisposable
             _mic?.Dispose(); _mic = null;
             _loop?.Dispose(); _loop = null;
         }
-        return string.IsNullOrEmpty(_stamp) ? null : new MeetingCapture(_stamp, _micPath, _loopPath, _notesPath, StartedLocal);
+        return _plan;
     }
 
     public void Dispose()

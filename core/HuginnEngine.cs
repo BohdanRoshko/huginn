@@ -66,7 +66,6 @@ internal sealed class HuginnEngine : IAsyncDisposable
         CleanupEnabled = Settings.CleanupEnabled;
         HasOdin = !string.IsNullOrWhiteSpace(s.OdinBaseUrl);
         SendMeetings = HasOdin && Settings.SendMeetingsToOdin;
-        KumoAuto = Settings.KumoAutoRecord;
         NotesMode = Settings.NotesMode;
         _p.Dictation.Device = Settings.Microphone;
         _p.Meeting.Device = Settings.Microphone;
@@ -101,11 +100,11 @@ internal sealed class HuginnEngine : IAsyncDisposable
     /// <summary>settings.json names an Odin to file to. Only Bohdan has Odin; for everyone else the menu hides the
     /// Odin item and meetings are only saved.</summary>
     public bool HasOdin { get; }
-    public bool KumoAuto { get; private set; }
     /// <summary>"always", "record" or "off" (see <see cref="Settings.NotesMode"/>).</summary>
     public string NotesMode { get; private set; }
-    /// <summary>"ask", "auto" or "off" (see <see cref="Settings.CallMode"/>).</summary>
-    public string CallMode { get; private set; } = Settings.CallMode;
+    /// <summary>Meeting detection, for every source (Kumospace and the call apps): "ask", "auto" or "off"
+    /// (see <see cref="Settings.MeetingDetection"/>).</summary>
+    public string DetectionMode { get; private set; } = Settings.MeetingDetection;
     /// <summary>This OS can tell which apps hold the mic, so meeting apps can be followed.</summary>
     public bool CanFollowCalls => _p.MicUsers != null;
     public bool IsMeetingRecording => _p.Meeting.IsRecording;
@@ -246,19 +245,11 @@ internal sealed class HuginnEngine : IAsyncDisposable
         _shell.Refresh();
     }
 
-    public void SetKumoAuto(bool on)
+    public void SetDetectionMode(string mode)
     {
-        KumoAuto = on;
-        Settings.KumoAutoRecord = on;
-        if (_kumo.Status == KumoStatus.NoDebugPort) OnKumoStatus(_kumo.Status);
-        _shell.Refresh();
-    }
-
-    public void SetCallMode(string mode)
-    {
-        CallMode = mode;
-        Settings.CallMode = mode;
-        HuginnLog.Write($"calls: mode {mode}");
+        DetectionMode = mode;
+        Settings.MeetingDetection = mode;
+        HuginnLog.Write($"meeting detection: {mode}");
         if (mode != "ask") HidePrompt();
         _shell.Refresh();
     }
@@ -726,15 +717,14 @@ internal sealed class HuginnEngine : IAsyncDisposable
 
     private void OnCallStarted(string app)
     {
-        HuginnLog.Write($"calls: {app} is using the mic (mode {CallMode}{(_p.Meeting.IsRecording ? ", already recording" : "")})");
-        if (CallMode == "off" || _p.Meeting.IsRecording) return;
-        if (CallMode == "auto")
+        HuginnLog.Write($"calls: {app} is using the mic (detection {DetectionMode}{(_p.Meeting.IsRecording ? ", already recording" : "")})");
+        if (DetectionMode == "off" || _p.Meeting.IsRecording) return;
+        if (DetectionMode == "auto")
         {
             StartForCall(app);
             return;
         }
-        _prompting = app;
-        _p.CallPrompt?.ShowPrompt(app);
+        Ask(app);
     }
 
     private void OnCallEnded(string app)
@@ -757,12 +747,22 @@ internal sealed class HuginnEngine : IAsyncDisposable
         SetStatus($"● Recording · {app}");
     }
 
+    /// <summary>Shows the pop-up for a meeting (one at a time: a second source waits until the first is answered).</summary>
+    private void Ask(string app)
+    {
+        if (_prompting != null) return;
+        _prompting = app;
+        HuginnLog.Write($"meeting detection: asking about {app}");
+        _p.CallPrompt?.ShowPrompt(app);
+    }
+
     private void StartFromPrompt()
     {
         var app = _prompting;
         HidePrompt();
         if (app == null || _p.Meeting.IsRecording) return;
-        StartForCall(app);
+        if (app == KumoSource) StartForKumo(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "started from the pop-up", _lastKumoRead);
+        else StartForCall(app);
     }
 
     private void PromptOption(string option)
@@ -771,14 +771,21 @@ internal sealed class HuginnEngine : IAsyncDisposable
         switch (option)
         {
             case "auto":
-                SetCallMode("auto");
-                if (app != null && !_p.Meeting.IsRecording) StartForCall(app); // "always" includes this call
+                SetDetectionMode("auto");
+                if (app != null && !_p.Meeting.IsRecording)  // "always" includes this meeting
+                {
+                    if (app == KumoSource) StartForKumo(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "started from the pop-up", _lastKumoRead);
+                    else StartForCall(app);
+                }
                 break;
             case "off":
-                SetCallMode("off");
+                if (app == KumoSource) _detector.OnUserEnded();
+                SetDetectionMode("off");
                 break;
             default:
-                HuginnLog.Write($"calls: not now for {app}");
+                HuginnLog.Write($"meeting detection: not now for {app}");
+                // Kumospace would ask again a second later; "not now" lasts until I am alone, as a hand stop does.
+                if (app == KumoSource) _detector.OnUserEnded();
                 HidePrompt();
                 break;
         }
@@ -884,21 +891,32 @@ internal sealed class HuginnEngine : IAsyncDisposable
             if (_p.Meeting.IsRecording) _timeline?.Add(snap);
         }
         var (action, reason) = _detector.Tick(now, snap, _p.Meeting.IsRecording);
-        if (!KumoAuto) return;
+        // Asked about a Kumospace meeting and now nobody is around: the question is moot.
+        if (_prompting == KumoSource && snap != null && (!snap.InCall || snap.Company.Count == 0)) HidePrompt();
+        if (DetectionMode == "off") return;
         if (action == KumoAction.Start && !_p.Meeting.IsRecording)
         {
-            StartMeeting();
-            if (!_p.Meeting.IsRecording) return;
-            _detector.OnAutoStarted(now);
-            var zone = snap?.Zone is { Length: > 0 } z ? z : "outside a room";
-            var people = string.Join(", ", snap?.Company.Select(p => p.Name) ?? Array.Empty<string>());
-            HuginnLog.Write($"kumo: auto start ({reason}), {zone}, with {people}");
-            SetStatus($"● Recording · {zone} · with {people}");
+            if (DetectionMode == "auto") StartForKumo(now, reason, snap);
+            else Ask(KumoSource);
         }
         else if (action == KumoAction.Stop && _p.Meeting.IsRecording)
         {
             _ = StopAutoMeetingAsync(reason);
         }
+    }
+
+    private const string KumoSource = "Kumospace";
+
+    // A Kumospace meeting starts recording (automatically or from the pop-up); the detector then owns its stop.
+    private void StartForKumo(long now, string reason, KumoSnapshot? snap)
+    {
+        StartMeeting();
+        if (!_p.Meeting.IsRecording) return;
+        _detector.OnAutoStarted(now);
+        var zone = snap?.Zone is { Length: > 0 } z ? z : "outside a room";
+        var people = string.Join(", ", snap?.Company.Select(p => p.Name) ?? Array.Empty<string>());
+        HuginnLog.Write($"kumo: auto start ({reason}), {zone}, with {people}");
+        SetStatus($"● Recording · {zone} · with {people}");
     }
 
     private async Task StopAutoMeetingAsync(string reason)

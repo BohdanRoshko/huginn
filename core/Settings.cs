@@ -17,19 +17,17 @@ internal static class Settings
     /// <summary>Show the recorder panel. Default ON on Windows; OFF on the Mac, which is a menu bar app first.</summary>
     public static bool MeetingPanelVisible { get => Flag("panel.txt", !OperatingSystem.IsMacOS()); set => SetFlag("panel.txt", value); }
 
-    /// <summary>Start and stop meeting recordings from Kumospace (KumoWatcher). Default ON.</summary>
-    public static bool KumoAutoRecord { get => Flag("kumo_auto.txt", true); set => SetFlag("kumo_auto.txt", value); }
-
-    /// <summary>What happens when a meeting app (Google Meet, Teams, Slack huddle, Zoom) starts using the mic:
-    /// "ask" shows the pop-up (the default), "auto" records at once, "off" does nothing. File calls.txt.</summary>
-    public static string CallMode
+    /// <summary>Meeting detection, one switch for every source (a Kumospace conversation, or a call in Meet, Teams, a
+    /// Slack huddle or Zoom): "ask" shows the pop-up (the default), "auto" records at once, "off" does nothing.
+    /// File detection.txt. (Until 2026-11-18 Kumospace had its own kumo_auto.txt; it is no longer read.)</summary>
+    public static string MeetingDetection
     {
         get
         {
-            var v = Read("calls.txt")?.ToLowerInvariant();
+            var v = Read("detection.txt")?.ToLowerInvariant();
             return v is "off" or "auto" ? v : "ask";
         }
-        set => Write("calls.txt", value);
+        set => Write("detection.txt", value);
     }
 
     /// <summary>When the Notes window shows: "always", "record" (opens when a recording starts), or "off". File

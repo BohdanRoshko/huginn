@@ -240,14 +240,13 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
             m.AddItem(Check("Auto-File Meetings to Odin", _engine.SendMeetings, () => _engine.SetSendMeetings(!_engine.SendMeetings)));
         if (_engine.KumoInstalled)
         {
-            m.AddItem(Check("Auto-Record Kumospace Meetings", _engine.KumoAuto, () => _engine.SetKumoAuto(!_engine.KumoAuto)));
             var kumo = Item(_engine.KumoStatusText, () => _ = _engine.RestartKumoAsync());
             kumo.Enabled = _engine.KumoRestartAvailable;
             m.AddItem(kumo);
             m.AddItem(Sub(_engine.PresenceTodayText, PresenceMenu()));
         }
 
-        m.AddItem(Sub("Meet, Teams, Slack and Zoom Calls", CallsMenu()));
+        m.AddItem(Sub("Meeting Detection", CallsMenu()));
 
         m.AddItem(NSMenuItem.SeparatorItem);
         m.AddItem(Item("Open Recordings Folder", () => { Directory.CreateDirectory(Paths.MeetingsDir()); MacUi.Open(Paths.MeetingsDir()); }));
@@ -328,13 +327,13 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         return menu;
     }
 
-    // Meetings in other apps, found by who holds the mic: a Notion-style pop-up, auto-record, or nothing.
+    // Meeting detection for every source (Kumospace and the call apps): a Notion-style pop-up, auto-record, or nothing.
     private NSMenu CallsMenu()
     {
         var menu = new NSMenu { AutoEnablesItems = false };
-        menu.AddItem(Check("Ask With a Pop-Up", _engine.CallMode == "ask", () => _engine.SetCallMode("ask")));
-        menu.AddItem(Check("Record Automatically", _engine.CallMode == "auto", () => _engine.SetCallMode("auto")));
-        menu.AddItem(Check("Off", _engine.CallMode == "off", () => _engine.SetCallMode("off")));
+        menu.AddItem(Check("Ask With a Pop-Up", _engine.DetectionMode == "ask", () => _engine.SetDetectionMode("ask")));
+        menu.AddItem(Check("Record Automatically", _engine.DetectionMode == "auto", () => _engine.SetDetectionMode("auto")));
+        menu.AddItem(Check("Off", _engine.DetectionMode == "off", () => _engine.SetDetectionMode("off")));
         return menu;
     }
 

@@ -6,8 +6,10 @@ using UserNotifications;
 namespace Huginn;
 
 /// <summary>
-/// The Mac shell: the menu bar item and its menu, the recorder panel, the Notes window and the dictation pill, over
-/// the shared <see cref="HuginnEngine"/>. The menu mirrors the Windows tray menu item for item.
+/// The Mac shell: a menu bar app, laid out like the Swift app it replaced (status line, Start/Stop Recording, Recent
+/// with a submenu per meeting, Notes, Open Recordings Folder, Open Log, Quit), plus what the shared engine adds
+/// (dictation, microphone, AI cleanup, Odin, Kumospace, the work timer). The recorder panel is a switch in the menu,
+/// off by default; the Notes window and the dictation pill work as before. Every decision is HuginnEngine's.
 /// </summary>
 [Register("AppDelegate")]
 internal sealed class AppDelegate : NSApplicationDelegate, IShell
@@ -18,17 +20,14 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
     private MacNotesWindow _notes = null!;
     private MacDictationOverlay? _overlay;
     private NSStatusItem _item = null!;
+    private NSMenu _menu = null!;
+    private NSMenuItem? _statusLine;
     private NSTimer? _clock;
     private TrayState _state = TrayState.Off;
-    private bool _panelVisible;
+    private string _status = "Starting…";
     private bool _exited;
     private bool _notificationsAsked;
     private readonly List<NSObject> _keep = new(); // NSMenu holds its delegate weakly
-
-    private NSMenuItem _statusItem = null!, _dictationItem = null!, _micItem = null!, _cleanupItem = null!;
-    private NSMenuItem _meetingItem = null!, _discardItem = null!, _sendItem = null!, _kumoAutoItem = null!;
-    private NSMenuItem _kumoStatusItem = null!, _presenceItem = null!, _panelItem = null!;
-    private NSMenuItem _notesOff = null!, _notesAlways = null!, _notesRecord = null!;
 
     public override void DidFinishLaunching(NSNotification notification)
     {
@@ -61,21 +60,21 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         _notes.RecordToggleRequested += _engine.ToggleMeeting;
         _notes.DiscardRequested += _engine.Discard;
         _notes.NotesChanged += _engine.SaveNotes;
-        _notes.HideRequested += () => { if (_engine.NotesMode == "always") HidePanelPair(); else _notes.HidePanel(); };
+        _notes.HideRequested += _notes.HidePanel;
+        // The notes window shows its own Stop / Discard when the recorder is not beside it on the same screen.
         _panel.FrameChanged += RecorderMoved;
-        _panel.VisibilityChanged += () =>
-        {
-            RecorderMoved();
-            if (_engine.NotesMode != "always") return;
-            if (_panel.IsShown) _notes.ShowPanel(); else _notes.HidePanel();
-        };
+        _panel.VisibilityChanged += RecorderMoved;
 
-        _item.Menu = BuildMenu();
-        _panelVisible = Settings.MeetingPanelVisible;
-        if (_panelVisible) _panel.ShowPanel();
+        _menu = new NSMenu { AutoEnablesItems = false, Delegate = Keep(new OnOpen(_ => RebuildMenu())) };
+        _item.Menu = _menu;
+        RebuildMenu();
+
+        if (Settings.MeetingPanelVisible) _panel.ShowPanel();
+        RecorderMoved();
+        if (_engine.NotesMode == "always") _notes.ShowPanel(); // "Always On" keeps the notepad open, as before
 
         _engine.Start();
-        UiProbe.Run(this, _panel, _notes, _overlay, _recent);
+        UiProbe.Run(this, _item, _panel, _notes, _overlay, _recent);
     }
 
     public override void WillTerminate(NSNotification notification)
@@ -87,12 +86,6 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
     private void RecorderMoved() => _notes.RecorderChanged(_panel.Frame, _panel.IsShown, _panel.Screen);
 
-    private void HidePanelPair()
-    {
-        _panel.HidePanel();
-        _notes.HidePanel();
-    }
-
     // ---- IShell ----
 
     public void RunOnUi(Action action) => MacUi.OnMain(action);
@@ -101,45 +94,62 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
     {
         _state = state;
         SetIcon();
-        if (state == TrayState.Recording && _engine.IsMeetingRecording)
+        if (_engine?.IsMeetingRecording == true)
         {
-            _clock ??= NSTimer.CreateRepeatingScheduledTimer(TimeSpan.FromSeconds(1), _ => SetIcon());
-            NSRunLoop.Current.AddTimer(_clock, NSRunLoopMode.Common);
+            if (_clock == null)
+            {
+                _clock = NSTimer.CreateRepeatingScheduledTimer(TimeSpan.FromSeconds(1), _ => { SetIcon(); UpdateStatusLine(); });
+                NSRunLoop.Main.AddTimer(_clock, NSRunLoopMode.Common);
+            }
         }
         else
         {
             _clock?.Invalidate();
             _clock = null;
         }
+        UpdateStatusLine();
     });
 
-    // The menu bar shows a waveform; red with the meeting clock while a meeting records.
+    // A waveform; while a meeting records, a red dot and the running clock in the menu bar itself, so a forgotten
+    // recording gets noticed.
     private void SetIcon()
     {
         var button = _item.Button;
-        string symbol = _state switch
+        bool meeting = _engine?.IsMeetingRecording == true;
+        var image = NSImage.GetSystemSymbol(meeting ? "record.circle.fill" : "waveform", "Huginn");
+        if (image != null) image.Template = !meeting;
+        button.Image = image;
+        button.ContentTintColor = meeting || _state == TrayState.Recording ? NSColor.SystemRed : null;
+        if (meeting && _engine!.MeetingStartedLocal is DateTime started)
         {
-            TrayState.Idle => "waveform",
-            TrayState.Recording => "record.circle",
-            TrayState.Busy => "hourglass",
-            _ => "waveform.slash",
-        };
-        button.Image = NSImage.GetSystemSymbol(symbol, "Huginn");
-        if (_state == TrayState.Recording && _engine?.MeetingStartedLocal is DateTime started)
-        {
-            var e = DateTime.Now - started;
-            var text = $" {(int)e.TotalHours}:{e.Minutes:00}:{e.Seconds:00}";
-            button.AttributedTitle = new NSAttributedString(text, new NSStringAttributes { ForegroundColor = NSColor.SystemRed });
-            button.ContentTintColor = NSColor.SystemRed;
+            button.ImagePosition = NSCellImagePosition.ImageLeading;
+            button.Title = " " + Elapsed(started);
         }
         else
         {
+            button.ImagePosition = NSCellImagePosition.ImageOnly;
             button.Title = "";
-            button.ContentTintColor = null;
         }
     }
 
-    public void SetStatus(string text) => MacUi.OnMain(() => { if (_statusItem != null) _statusItem.Title = text; });
+    /// <summary>mm:ss, rolling over to h:mm:ss past an hour.</summary>
+    private static string Elapsed(DateTime started)
+    {
+        var e = DateTime.Now - started;
+        return e.TotalHours >= 1 ? $"{(int)e.TotalHours}:{e.Minutes:00}:{e.Seconds:00}" : $"{e.Minutes:00}:{e.Seconds:00}";
+    }
+
+    public void SetStatus(string text) => MacUi.OnMain(() => { _status = text; UpdateStatusLine(); });
+
+    private string StatusLine() =>
+        _engine?.IsMeetingRecording == true && _engine.MeetingStartedLocal is DateTime started
+            ? $"● Recording {Elapsed(started)}"
+            : _status;
+
+    private void UpdateStatusLine()
+    {
+        if (_statusLine != null) _statusLine.Title = StatusLine();
+    }
 
     public void Warn(string title, string text) => Notify(title, text);
 
@@ -167,26 +177,8 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
     public bool OwnWindowActive => _panel.IsKeyWindow || _notes.IsKeyWindow;
 
-    public void Refresh() => MacUi.OnMain(() =>
-    {
-        if (_dictationItem == null) return;
-        _dictationItem.State = On(_engine.DictationEnabled);
-        _cleanupItem.State = On(_engine.CleanupEnabled);
-        _cleanupItem.Enabled = _engine.DictationEnabled;
-        bool rec = _engine.IsMeetingRecording;
-        _meetingItem.Title = rec ? "Stop Meeting Recording" : "Start Meeting Recording";
-        _discardItem.Enabled = rec;
-        _sendItem.State = On(_engine.SendMeetings);
-        _kumoAutoItem.State = On(_engine.KumoAuto);
-        _kumoStatusItem.Title = _engine.KumoStatusText;
-        _kumoStatusItem.Enabled = _engine.KumoRestartAvailable;
-        _presenceItem.Title = _engine.PresenceTodayText;
-        _panelItem.State = On(_panelVisible);
-        _notesOff.State = On(_engine.NotesMode == "off");
-        _notesAlways.State = On(_engine.NotesMode == "always");
-        _notesRecord.State = On(_engine.NotesMode == "record");
-        SetIcon();
-    });
+    // The menu is rebuilt each time it opens, so it always shows the current state; here only the menu bar changes.
+    public void Refresh() => MacUi.OnMain(() => { SetIcon(); UpdateStatusLine(); });
 
     public void Exit() => MacUi.OnMain(Quit);
 
@@ -194,90 +186,171 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
     private static NSCellStateValue On(bool on) => on ? NSCellStateValue.On : NSCellStateValue.Off;
 
-    private static NSMenuItem Item(string title, Action? click = null)
+    private static NSMenuItem Item(string title, Action? click = null, string key = "")
     {
-        var item = click == null ? new NSMenuItem(title) : new NSMenuItem(title, (_, _) => click());
-        if (click == null) item.Enabled = false;
+        var item = click == null ? new NSMenuItem(title) : new NSMenuItem(title, key, (_, _) => click());
+        item.Enabled = click != null;
         return item;
     }
 
-    private NSMenu BuildMenu()
+    private static NSMenuItem Check(string title, bool on, Action click)
+    {
+        var item = Item(title, click);
+        item.State = On(on);
+        return item;
+    }
+
+    private static NSMenuItem Sub(string title, NSMenu submenu)
+    {
+        var item = new NSMenuItem(title) { Submenu = submenu, Enabled = true };
+        return item;
+    }
+
+    private void RebuildMenu()
+    {
+        var m = _menu;
+        m.RemoveAllItems();
+
+        _statusLine = Item(StatusLine());
+        m.AddItem(_statusLine);
+        m.AddItem(NSMenuItem.SeparatorItem);
+
+        bool rec = _engine.IsMeetingRecording;
+        m.AddItem(Item(rec ? "Stop Recording" : "Start Recording", _engine.ToggleMeeting, "r"));
+        if (rec) m.AddItem(Item("Stop & Discard", ConfirmDiscard));
+
+        var recent = _recent.Entries;
+        if (recent.Count > 0)
+        {
+            m.AddItem(NSMenuItem.SeparatorItem);
+            m.AddItem(Item("Recent"));
+            foreach (var job in recent.Take(5))
+                m.AddItem(Sub("   " + JobTitle(job), JobMenu(job)));
+        }
+
+        m.AddItem(NSMenuItem.SeparatorItem);
+        m.AddItem(Check($"Dictation (hold {_engine.HotkeyName})", _engine.DictationEnabled, () => _engine.SetDictationEnabled(!_engine.DictationEnabled)));
+        m.AddItem(Sub("Microphone", MicrophoneMenu()));
+        var cleanup = Check("Clean Up Text (AI)", _engine.CleanupEnabled, () => _engine.SetCleanupEnabled(!_engine.CleanupEnabled));
+        cleanup.Enabled = _engine.DictationEnabled;
+        m.AddItem(cleanup);
+
+        m.AddItem(NSMenuItem.SeparatorItem);
+        m.AddItem(Check("Auto-File Meetings to Odin", _engine.SendMeetings, () => _engine.SetSendMeetings(!_engine.SendMeetings)));
+        if (_engine.KumoInstalled)
+        {
+            m.AddItem(Check("Auto-Record Kumospace Meetings", _engine.KumoAuto, () => _engine.SetKumoAuto(!_engine.KumoAuto)));
+            var kumo = Item(_engine.KumoStatusText, () => _ = _engine.RestartKumoAsync());
+            kumo.Enabled = _engine.KumoRestartAvailable;
+            m.AddItem(kumo);
+            m.AddItem(Sub(_engine.PresenceTodayText, PresenceMenu()));
+        }
+
+        m.AddItem(NSMenuItem.SeparatorItem);
+        m.AddItem(Item("Open Recordings Folder", () => { Directory.CreateDirectory(Paths.MeetingsDir()); MacUi.Open(Paths.MeetingsDir()); }));
+        m.AddItem(Item("Open Log", () => MacUi.Open(Paths.LogPath())));
+        m.AddItem(Sub("Notes", NotesMenu()));
+        m.AddItem(Check("Show Recorder Panel", Settings.MeetingPanelVisible, TogglePanel));
+
+        m.AddItem(NSMenuItem.SeparatorItem);
+        m.AddItem(Item("Quit Huginn", Quit, "q"));
+    }
+
+    private static string JobTitle(RecentMeeting job)
+    {
+        var name = string.IsNullOrWhiteSpace(job.Title) ? job.Started.ToString("MMM d, h:mm tt") : job.Title!;
+        return $"{name} — {job.Status}";
+    }
+
+    /// <summary>Per-meeting actions: a submenu, so Rename sits next to Open (as in the Swift app).</summary>
+    private NSMenu JobMenu(RecentMeeting job)
+    {
+        var sub = new NSMenu { AutoEnablesItems = false };
+        var path = RecentMeetings.ResolveTranscript(job);
+        bool has = File.Exists(path);
+        var open = Item("Open Transcript", () => MacUi.Open(path)); open.Enabled = has; sub.AddItem(open);
+        sub.AddItem(Item("Rename…", () => Rename(job)));
+        var show = Item("Show in Finder", () => MacUi.Reveal(path)); show.Enabled = has; sub.AddItem(show);
+        var copy = Item("Copy Path", () => MacUi.Copy(path)); copy.Enabled = has; sub.AddItem(copy);
+        if (job.Cancelable)
+        {
+            sub.AddItem(NSMenuItem.SeparatorItem);
+            sub.AddItem(Item("Cancel Processing", () => _engine.CancelJob(job.Id)));
+        }
+        return sub;
+    }
+
+    private void Rename(RecentMeeting job)
+    {
+        NSApplication.SharedApplication.ActivateIgnoringOtherApps(true);
+        var alert = new NSAlert { MessageText = "Rename meeting", InformativeText = "The transcript file takes this name too." };
+        var field = new NSTextField(new CGRect(0, 0, 280, 24)) { StringValue = job.Title ?? "" };
+        alert.AccessoryView = field;
+        alert.AddButton("Rename");
+        alert.AddButton("Cancel");
+        alert.Window.InitialFirstResponder = field;
+        if (alert.RunModal() == (nint)(long)NSAlertButtonReturn.First) _recent.Rename(job.Id, field.StringValue);
+    }
+
+    private void ConfirmDiscard()
+    {
+        NSApplication.SharedApplication.ActivateIgnoringOtherApps(true);
+        var alert = new NSAlert
+        {
+            MessageText = "Discard this recording?",
+            InformativeText = "The audio will be deleted and nothing will be transcribed.",
+            AlertStyle = NSAlertStyle.Warning,
+        };
+        alert.AddButton("Discard");
+        alert.AddButton("Keep Recording");
+        if (alert.RunModal() == (nint)(long)NSAlertButtonReturn.First) _engine.Discard();
+    }
+
+    private NSMenu MicrophoneMenu()
     {
         var menu = new NSMenu { AutoEnablesItems = false };
-        _statusItem = Item("Starting…");
-        // The dictation switch: off stops the key from doing anything, without quitting the app.
-        _dictationItem = Item($"Dictation (hold {_engine.HotkeyName})", () => _engine.SetDictationEnabled(!_engine.DictationEnabled));
-        _micItem = Item("Microphone");
-        _micItem.Enabled = true;
-        _micItem.Submenu = new NSMenu { AutoEnablesItems = false, Delegate = Keep(new OnOpen(FillMicrophones)) };
-        _cleanupItem = Item("Clean Up Text (AI)", () => _engine.SetCleanupEnabled(!_engine.CleanupEnabled));
-        _meetingItem = Item("Start Meeting Recording", _engine.ToggleMeeting);
-        _discardItem = Item("Stop & Discard Recording", _engine.Discard);
-        _sendItem = Item("Auto-File Meetings to Odin", () => _engine.SetSendMeetings(!_engine.SendMeetings));
-        _kumoAutoItem = Item("Auto-Record Kumospace Meetings", () => _engine.SetKumoAuto(!_engine.KumoAuto));
-        _kumoStatusItem = Item("Kumospace: starting…", () => _ = _engine.RestartKumoAsync());
-        _presenceItem = Item("Kumospace today: nothing yet");
-        _presenceItem.Enabled = true;
-        _presenceItem.Submenu = new NSMenu { AutoEnablesItems = false, Delegate = Keep(new OnOpen(FillPresence)) };
-        _panelItem = Item("Show Recorder Panel", TogglePanel);
-        var notes = Item("Notes Window");
-        notes.Enabled = true;
-        notes.Submenu = new NSMenu { AutoEnablesItems = false };
-        _notesOff = Item("Off", () => SetNotesMode("off"));
-        _notesAlways = Item("Always On, Beside the Recorder", () => SetNotesMode("always"));
-        _notesRecord = Item("Open When a Recording Starts", () => SetNotesMode("record"));
-        notes.Submenu.AddItem(_notesOff);
-        notes.Submenu.AddItem(_notesAlways);
-        notes.Submenu.AddItem(_notesRecord);
-
-        foreach (var i in new[] { _statusItem, NSMenuItem.SeparatorItem, _dictationItem, _micItem, _cleanupItem, NSMenuItem.SeparatorItem,
-                     _meetingItem, _discardItem, _sendItem, _kumoAutoItem, _kumoStatusItem, _presenceItem, _panelItem, notes,
-                     NSMenuItem.SeparatorItem, Item("Open Log", () => MacUi.Open(Paths.LogPath())),
-                     Item("Open Meetings Folder", () => { Directory.CreateDirectory(Paths.MeetingsDir()); MacUi.Open(Paths.MeetingsDir()); }),
-                     Item("Quit Huginn", Quit) })
-            menu.AddItem(i);
-        menu.Delegate = Keep(new OnOpen(_ => Refresh()));
+        menu.AddItem(Check("System Default", _engine.Microphone.Length == 0, () => _engine.SelectMicrophone("", "System default")));
+        menu.AddItem(NSMenuItem.SeparatorItem);
+        foreach (var (id, name) in MicCapture.Devices())
+            menu.AddItem(Check(name, _engine.Microphone == id, () => _engine.SelectMicrophone(id, name)));
         return menu;
     }
 
-    private OnOpen Keep(OnOpen d) { _keep.Add(d); return d; }
-
-    private void FillMicrophones(NSMenu menu)
+    private NSMenu PresenceMenu()
     {
-        menu.RemoveAllItems();
-        var def = Item("System Default", () => _engine.SelectMicrophone("", "System default"));
-        def.State = On(_engine.Microphone.Length == 0);
-        menu.AddItem(def);
-        menu.AddItem(NSMenuItem.SeparatorItem);
-        foreach (var (id, name) in MicCapture.Devices())
-        {
-            var item = Item(name, () => _engine.SelectMicrophone(id, name));
-            item.State = On(_engine.Microphone == id);
-            menu.AddItem(item);
-        }
-    }
-
-    private void FillPresence(NSMenu menu)
-    {
-        menu.RemoveAllItems();
+        var menu = new NSMenu { AutoEnablesItems = false };
         foreach (var line in _engine.PresenceWeek()) menu.AddItem(Item(line));
         menu.AddItem(NSMenuItem.SeparatorItem);
         menu.AddItem(Item("Open the Presence Folder", () => { Directory.CreateDirectory(Paths.PresenceDir()); MacUi.Open(Paths.PresenceDir()); }));
+        return menu;
+    }
+
+    private NSMenu NotesMenu()
+    {
+        var menu = new NSMenu { AutoEnablesItems = false };
+        menu.AddItem(Check("Off", _engine.NotesMode == "off", () => SetNotesMode("off")));
+        menu.AddItem(Check("Always On", _engine.NotesMode == "always", () => SetNotesMode("always")));
+        menu.AddItem(Check("Open When Recording Starts", _engine.NotesMode == "record", () => SetNotesMode("record")));
+        menu.AddItem(NSMenuItem.SeparatorItem);
+        var show = Item("Show Notes Window", _notes.ShowPanel, "n");
+        show.Enabled = _engine.NotesMode != "off";
+        menu.AddItem(show);
+        return menu;
     }
 
     private void SetNotesMode(string mode)
     {
         _engine.SetNotesMode(mode);
-        if (mode == "always") { if (_panel.IsShown) _notes.ShowPanel(); }
+        if (mode == "always") _notes.ShowPanel();
         else if (mode == "off") _notes.HidePanel();
+        // "record": leave the window as it is; it opens with the next recording.
     }
 
     private void TogglePanel()
     {
-        _panelVisible = !_panelVisible;
-        Settings.MeetingPanelVisible = _panelVisible;
-        if (_panelVisible) _panel.ShowPanel(); else _panel.HidePanel();
-        Refresh();
+        var show = !Settings.MeetingPanelVisible;
+        Settings.MeetingPanelVisible = show;
+        if (show) _panel.ShowPanel(); else _panel.HidePanel();
     }
 
     private void Quit()
@@ -290,7 +363,9 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         NSApplication.SharedApplication.Terminate(this);
     }
 
-    /// <summary>Fills a submenu (or refreshes the menu) right before it opens.</summary>
+    private OnOpen Keep(OnOpen d) { _keep.Add(d); return d; }
+
+    /// <summary>Rebuilds the menu right before it opens.</summary>
     private sealed class OnOpen : NSMenuDelegate
     {
         private readonly Action<NSMenu> _fill;

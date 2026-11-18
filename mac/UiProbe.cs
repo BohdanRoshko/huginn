@@ -3,19 +3,28 @@ using Foundation;
 
 namespace Huginn;
 
-/// <summary>CI photographs the windows, since nobody here can look at a Mac. HUGINN_UI_PROBE=windows fills the
-/// recorder with sample rows, puts both windows in the recording state and shows the dictation pill.</summary>
+/// <summary>CI photographs the app, since nobody here can look at a Mac. HUGINN_UI_PROBE=menu opens the menu bar
+/// menu with sample recent meetings; HUGINN_UI_PROBE=windows shows the optional recorder panel, the Notes window and
+/// the dictation pill in their recording states.</summary>
 internal static class UiProbe
 {
-    public static void Run(IShell shell, MacRecorderPanel panel, MacNotesWindow notes, MacDictationOverlay? overlay, RecentMeetings recent)
+    public static void Run(IShell shell, NSStatusItem item, MacRecorderPanel panel, MacNotesWindow notes, MacDictationOverlay? overlay, RecentMeetings recent)
     {
-        if (Environment.GetEnvironmentVariable("HUGINN_UI_PROBE") != "windows") return;
+        var mode = Environment.GetEnvironmentVariable("HUGINN_UI_PROBE");
+        if (mode != "windows" && mode != "menu") return;
         var a = recent.Add("2026-11-18_093000", DateTime.Now.AddHours(-5));
         recent.SetTitle(a, "Sprint review with the team");
         recent.SetStatus(a, "✓ internal-dev · 3 task(s)", JobTone.Good, cancelable: false);
         var b = recent.Add("2026-11-18_120500", DateTime.Now.AddHours(-2));
         recent.SetStatus(b, "Saved · Odin offline", JobTone.Warn, cancelable: false);
         recent.Add("2026-11-18_140000", DateTime.Now.AddMinutes(-20)); // still transcribing: shows the cancel button
+
+        if (mode == "menu")
+        {
+            // Open the menu a moment after launch; it stays open (menu tracking) until the probe kills the app.
+            NSTimer.CreateScheduledTimer(3, _ => item.Button.PerformClick(null));
+            return;
+        }
 
         panel.ShowPanel();
         panel.ShowRecording(DateTime.Now.AddSeconds(-83));

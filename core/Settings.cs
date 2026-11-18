@@ -14,20 +14,20 @@ internal static class Settings
     /// <summary>Auto-file a finished meeting recording to Odin (POST /api/meetings/process). Default ON.</summary>
     public static bool SendMeetingsToOdin { get => Flag("send_meetings.txt", true); set => SetFlag("send_meetings.txt", value); }
 
-    /// <summary>Show the recorder panel. Default ON.</summary>
-    public static bool MeetingPanelVisible { get => Flag("panel.txt", true); set => SetFlag("panel.txt", value); }
+    /// <summary>Show the recorder panel. Default ON on Windows; OFF on the Mac, which is a menu bar app first.</summary>
+    public static bool MeetingPanelVisible { get => Flag("panel.txt", !OperatingSystem.IsMacOS()); set => SetFlag("panel.txt", value); }
 
     /// <summary>Start and stop meeting recordings from Kumospace (KumoWatcher). Default ON.</summary>
     public static bool KumoAutoRecord { get => Flag("kumo_auto.txt", true); set => SetFlag("kumo_auto.txt", value); }
 
-    /// <summary>When the Notes window shows: "always" (paired with the recorder; the default), "record" (opens when a
-    /// recording starts), or "off". File notes.txt; anything else reads as "always".</summary>
+    /// <summary>When the Notes window shows: "always", "record" (opens when a recording starts), or "off". File
+    /// notes.txt. Default "always" on Windows (beside the recorder), "off" on the Mac (as the Swift app had it).</summary>
     public static string NotesMode
     {
         get
         {
             var v = Read("notes.txt")?.ToLowerInvariant();
-            return v is "off" or "record" ? v : "always";
+            return v is "off" or "record" or "always" ? v : OperatingSystem.IsMacOS() ? "off" : "always";
         }
         set => Write("notes.txt", value);
     }

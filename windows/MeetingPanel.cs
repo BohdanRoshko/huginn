@@ -125,7 +125,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     public void HidePanel() => Ui(() => { CancelRename(); SavePosition(); if (Visible) Hide(); });
 
     public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; Invalidate(); });
-    public void ShowRecording(DateTime startedLocal) => Ui(() => { _recording = true; _discardArmed = false; _startedLocal = startedLocal; Array.Clear(_wave); _incoming = 0; if (!Visible) { RestorePosition(); Show(); } Invalidate(); });
+    public void ShowRecording(DateTime startedLocal) => Ui(() => { _recording = true; _discardArmed = false; _startedLocal = startedLocal; Array.Clear(_wave); _incoming = 0; if (!Visible && Settings.MeetingPanelVisible) { RestorePosition(); Show(); } Invalidate(); });
 
     /// <summary>Push a live input level (0..1) into the meter. Thread-safe (single float write).</summary>
     public void SetLevel(float level01)

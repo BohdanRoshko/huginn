@@ -116,9 +116,16 @@ jobs:
           export HUGINN_DATA_DIR="$RUNNER_TEMP/huginn-ui"
           mkdir -p "$HUGINN_DATA_DIR" shots
           cp "$RUNNER_TEMP/huginn-data/ggml-large-v3-turbo.bin" "$HUGINN_DATA_DIR/" || true
-          HUGINN_UI_PROBE=windows "$APP/Contents/MacOS/Huginn" > "$RUNNER_TEMP/ui.log" 2>&1 &
+          # The menu bar menu, as a user first sees the app (it is a menu bar app; the panel is off by default).
+          HUGINN_UI_PROBE=menu "$APP/Contents/MacOS/Huginn" > "$RUNNER_TEMP/ui.log" 2>&1 &
+          sleep 10
+          screencapture -x shots/menu.png || echo "screencapture failed (menu)"
+          pkill -x Huginn || true
+          sleep 2
+          # The optional windows: recorder panel, Notes window, dictation pill.
+          HUGINN_UI_PROBE=windows "$APP/Contents/MacOS/Huginn" >> "$RUNNER_TEMP/ui.log" 2>&1 &
           sleep 14
-          screencapture -x shots/windows.png || echo "screencapture failed"
+          screencapture -x shots/windows.png || echo "screencapture failed (windows)"
           pkill -x Huginn || true
           cat "$RUNNER_TEMP/ui.log" || true
           cat "$HUGINN_DATA_DIR/huginn.log" || true

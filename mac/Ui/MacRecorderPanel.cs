@@ -142,7 +142,7 @@ internal sealed class MacRecorderPanel : IRecorderView
         _startedLocal = startedLocal;
         Array.Clear(_wave);
         _incoming = 0;
-        if (!_panel.IsVisible)
+        if (!_panel.IsVisible && Settings.MeetingPanelVisible) // the menu's "Show Recorder Panel" switch
         {
             RestorePos();
             _panel.OrderFrontRegardless();

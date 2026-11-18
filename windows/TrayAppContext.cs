@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.Windows.Forms;
 using NAudio.Wave;
 
@@ -52,6 +53,10 @@ internal sealed class TrayAppContext : ApplicationContext
     private SpeakerTimeline? _timeline;
     private KumoSnapshot? _lastKumoRead;
     private string? _lastCompanyLogged;
+    private long _lastKumoReadAt;
+    private readonly PresenceLog _presence = new(Paths.PresenceDir());
+    private ToolStripMenuItem _presenceItem = null!;
+    private int _presenceRefresh;
     private bool _kumoAuto;
     private bool _kumoRestartHinted;
     private ToolStripMenuItem _kumoAutoItem = null!;
@@ -254,6 +259,10 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(_kumoAutoItem);
         _kumoStatusItem = new ToolStripMenuItem("Kumospace: starting…", null, (_, _) => _ = RestartKumoAsync()) { Enabled = false };
         menu.Items.Add(_kumoStatusItem);
+        _presenceItem = new ToolStripMenuItem("Kumospace today: nothing yet");
+        _presenceItem.DropDownItems.Add(new ToolStripMenuItem("…") { Enabled = false });
+        _presenceItem.DropDownOpening += (_, _) => FillPresenceDays();
+        menu.Items.Add(_presenceItem);
         _panelItem = new ToolStripMenuItem("Show recorder panel", null, (_, _) => TogglePanel()) { Checked = _panelVisible };
         menu.Items.Add(_panelItem);
         var notesMenu = new ToolStripMenuItem("Notes window");
@@ -391,6 +400,43 @@ internal sealed class TrayAppContext : ApplicationContext
         bool any = false;
         while (_kumoReads.TryDequeue(out var snap)) { any = true; HandleKumoRead(now, snap); }
         if (!any) HandleKumoRead(now, null);
+        TrackPresence(now);
+    }
+
+    // The work timer: my Kumospace status, written once a change (and every 5 min) to Presence\<day>.tsv.
+    private void TrackPresence(long now)
+    {
+        var snap = _lastKumoRead;
+        string state = _kumo.Status switch
+        {
+            KumoStatus.NotRunning => "closed",
+            KumoStatus.Off or KumoStatus.NoDebugPort => "unknown",
+            _ when snap == null || now - _lastKumoReadAt > 10_000 => "unknown",
+            _ when !snap.InSpace => "not in space",
+            _ => snap.Availability.Length > 0 ? snap.Availability : "unknown",
+        };
+        _presence.Observe(DateTime.Now, state);
+        if (_presenceRefresh++ % 30 == 0) // the tray line, every 30 s
+            _presenceItem.Text = "Kumospace today: " + PresenceLog.Describe(PresenceLog.Totals(Paths.PresenceDir(), DateTime.Today, DateTime.Now));
+    }
+
+    private void FillPresenceDays()
+    {
+        _presenceItem.DropDownItems.Clear();
+        var now = DateTime.Now;
+        for (int i = 0; i < 7; i++)
+        {
+            var day = DateTime.Today.AddDays(-i);
+            var label = i == 0 ? "Today" : i == 1 ? "Yesterday" : day.ToString("ddd d MMM", CultureInfo.InvariantCulture);
+            var text = PresenceLog.Describe(PresenceLog.Totals(Paths.PresenceDir(), day, now), withAway: true);
+            _presenceItem.DropDownItems.Add(new ToolStripMenuItem($"{label}:  {text}") { Enabled = false });
+        }
+        _presenceItem.DropDownItems.Add(new ToolStripSeparator());
+        _presenceItem.DropDownItems.Add(new ToolStripMenuItem("Open the presence folder", null, (_, _) =>
+        {
+            Directory.CreateDirectory(Paths.PresenceDir());
+            Process.Start(new ProcessStartInfo("explorer.exe", Paths.PresenceDir()) { UseShellExecute = true });
+        }));
     }
 
     private void HandleKumoRead(long now, KumoSnapshot? snap)
@@ -399,6 +445,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             var before = _lastKumoRead?.Company.Count ?? 0;
             _lastKumoRead = snap;
+            _lastKumoReadAt = now;
             // Who I am with, logged on each change, so a late or missed start can be traced afterwards.
             var with = snap.InCall ? string.Join(", ", snap.Company.Select(p => p.Name).OrderBy(n => n)) : "";
             if (with != _lastCompanyLogged)
@@ -920,6 +967,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
     private void Quit()
     {
+        _presence.Observe(DateTime.Now, "off");
         _tray.Visible = false;
         // Stop any in-flight meeting jobs so their background continuations don't touch the disposing panel.
         foreach (var cts in _jobCts.Values) { try { cts.Cancel(); } catch { /* already disposed */ } }

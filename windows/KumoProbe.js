@@ -27,6 +27,10 @@
   const self = s.users && s.users.userSelf;
   const out = { ok: true, t: Date.now(), callState: call && call.meetingState ? call.meetingState() : "none" };
 
+  // My status (available / away / focusing) for the work timer; the lobby (/profile) is not the space.
+  out.inSpace = !!self && !/^\/profile/.test(location.pathname);
+  out.availability = (self && self.userStatus && self.userStatus.availability) || "";
+
   // Where I am: the room (zone) and the people the space puts in the same room.
   if (self) {
     const zones = (s.space && s.space.zones && (s.space.zones.entities || s.space.zones)) || {};

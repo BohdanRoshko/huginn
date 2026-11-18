@@ -25,6 +25,9 @@ internal static class Paths
     /// to disk (no transcription) and exits. Deleted on consumption; a stale one is cleared at startup.</summary>
     public static string QuitFlagPath() => Path.Combine(Dir, "quit.flag");
 
+    /// <summary>%LOCALAPPDATA%\Munin\Presence — my Kumospace status, one file per day (<see cref="PresenceLog"/>).</summary>
+    public static string PresenceDir() => Path.Combine(Dir, "Presence");
+
     /// <summary>The %LOCALAPPDATA%\Munin folder itself (for watchers).</summary>
     public static string BaseDir() => Dir;
 

@@ -19,7 +19,9 @@ internal sealed record KumoSnapshot(
     IReadOnlyList<KumoPerson> RoomMates,
     IReadOnlyDictionary<string, string> Names,
     IReadOnlyList<(long T, IReadOnlyDictionary<string, double> Levels)> Samples,
-    IReadOnlyList<(long T, double Level)> Local)
+    IReadOnlyList<(long T, double Level)> Local,
+    bool InSpace = true,
+    string Availability = "")
 {
     public bool InCall => CallState == "joined-meeting";
 
@@ -206,7 +208,9 @@ internal sealed class KumoWatcher : IDisposable
             me,
             People(v, "heard", "id"),
             People(v, "roomMates", "id"),
-            names, samples, local);
+            names, samples, local,
+            !v.TryGetProperty("inSpace", out var ins) || ins.ValueKind != JsonValueKind.False,
+            Str(v, "availability"));
     }
 
     private static string Str(JsonElement e, string p) =>

@@ -33,21 +33,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The .NET macOS workload needs the Xcode it was built against (27.2 for SDK 27.2 on 2026-11-18); take the
-      # newest Xcode on the image. The build step names the version it wants if this one is wrong.
-      - name: Pick Xcode
-        run: |
-          ls -d /Applications/Xcode*.app
-          X=$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -v beta | sort -V | tail -1)
-          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
-          xcodebuild -version
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
 
       - name: Install the macOS workload
         run: dotnet workload install macos
+
+      # The workload refuses any Xcode but the one it was built against, and which workload a runner gets varies.
+      # So read the version from the installed SDK pack (Microsoft.macOS.Sdk.net10.0_26.0 → Xcode 26.0) and pick it.
+      - name: Pick the Xcode the workload wants
+        run: |
+          set -euo pipefail
+          ls -d /Applications/Xcode*.app
+          V=$(ls -d "$HOME"/.dotnet/packs/Microsoft.macOS.Sdk.net10.0_* | sed 's/.*_//' | sort -V | tail -1)
+          echo "workload wants Xcode $V"
+          X=$(ls -d /Applications/Xcode_"$V".app /Applications/Xcode_"$V".*.app 2>/dev/null | grep -v beta | sort -V | tail -1 || true)
+          test -n "$X" || { echo "::error::no Xcode $V on this runner"; exit 1; }
+          sudo xcode-select -s "$X"
+          xcodebuild -version
 
       - name: Test the core
         run: dotnet test tests/Huginn.Core.Tests -c Release

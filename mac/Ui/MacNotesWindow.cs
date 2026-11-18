@@ -437,7 +437,16 @@ internal sealed class MacNotesWindow : INotesView
         UpdateHideActions();
     }
 
-    internal void OnRightMouseDown() => HideRequested?.Invoke();
+    private NSMenu? _hideMenu;
+
+    // A menu, not an instant hide: a stray right-click lost the window.
+    internal void OnRightMouseDown(NSEvent e)
+    {
+        var menu = new NSMenu { AutoEnablesItems = false };
+        menu.AddItem(new NSMenuItem("Hide panel", (_, _) => HideRequested?.Invoke()));
+        _hideMenu = menu;
+        NSMenu.PopUpContextMenu(menu, e, _view);
+    }
 
     internal void OnMouseMoved(CGPoint p)
     {
@@ -550,7 +559,7 @@ internal sealed class NotesView : NSView
     public override void MouseDown(NSEvent theEvent) => _owner.OnMouseDown(Local(theEvent));
     public override void MouseDragged(NSEvent theEvent) => _owner.OnMouseDragged();
     public override void MouseUp(NSEvent theEvent) => _owner.OnMouseUp();
-    public override void RightMouseDown(NSEvent theEvent) => _owner.OnRightMouseDown();
+    public override void RightMouseDown(NSEvent theEvent) => _owner.OnRightMouseDown(theEvent);
     public override void MouseMoved(NSEvent theEvent) => _owner.OnMouseMoved(Local(theEvent));
     public override void MouseExited(NSEvent theEvent) => _owner.OnMouseExited();
 }

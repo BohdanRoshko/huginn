@@ -26,7 +26,7 @@ internal sealed class NotesPanel : Form, INotesView
     public event Action? DiscardRequested;
     /// <summary>The pad changed (debounced); the app persists <see cref="Snapshot"/>.</summary>
     public event Action? NotesChanged;
-    /// <summary>Right-click on the header: hide this window (and the recorder, when they are paired).</summary>
+    /// <summary>Right-click, then "Hide panel": hide this window (and the recorder, when they are paired).</summary>
     public event Action? HideRequested;
 
     /// <summary>Stamp → the transcript's CURRENT path (it moves on rename), or null when there is none yet.</summary>
@@ -400,9 +400,20 @@ internal sealed class NotesPanel : Form, INotesView
     }
 
     // ---- mouse (the header + footer; the pad handles its own) ----
+    private ContextMenuStrip? _hideMenu;
+
+    // A menu, not an instant hide: a stray right-click lost the window.
+    private void ShowHideMenu(Point at)
+    {
+        _hideMenu?.Dispose();
+        _hideMenu = new ContextMenuStrip();
+        _hideMenu.Items.Add("Hide panel", null, (_, _) => HideRequested?.Invoke());
+        _hideMenu.Show(this, at);
+    }
+
     protected override void OnMouseDown(MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Right) { HideRequested?.Invoke(); return; }
+        if (e.Button == MouseButtons.Right) { ShowHideMenu(e.Location); return; }
         if (e.Button != MouseButtons.Left) return;
         if (ActionsShown && Pill.Contains(e.Location)) { RecordToggleRequested?.Invoke(); return; }
         if (ActionsShown && _recording && TrashRect.Contains(e.Location))

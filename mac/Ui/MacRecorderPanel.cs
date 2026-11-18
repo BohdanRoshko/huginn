@@ -401,7 +401,15 @@ internal sealed class MacRecorderPanel : IRecorderView
         CommitRename();
         int row = RowAt(p);
         if (row >= 0) ShowRowMenu(_entries[row], e);
-        else HidePanel();
+        else ShowPanelMenu(e); // a menu, not an instant hide: a stray right-click lost the panel
+    }
+
+    private void ShowPanelMenu(NSEvent e)
+    {
+        var menu = new NSMenu { AutoEnablesItems = false };
+        menu.AddItem(new NSMenuItem("Hide panel", (_, _) => HidePanel()));
+        _rowMenu = menu;
+        NSMenu.PopUpContextMenu(menu, e, _view);
     }
 
     internal void OnMouseMoved(CGPoint p)

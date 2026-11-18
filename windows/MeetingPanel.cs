@@ -435,7 +435,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         {
             int row = RowAt(e.Location);
             if (row >= 0) ShowRowMenu(_entries[row], e.Location);
-            else HidePanel();
+            else ShowPanelMenu(e.Location); // a menu, not an instant hide: a stray right-click lost the panel
             return;
         }
         if (e.Button != MouseButtons.Left) return;
@@ -553,6 +553,15 @@ internal sealed class MeetingPanel : Form, IRecorderView
         _rowMenu.Items.Add(new ToolStripMenuItem("Open transcript", null, (_, _) => OpenPath(path)) { Enabled = hasFile });
         _rowMenu.Items.Add(new ToolStripMenuItem("Show in folder", null, (_, _) => RevealPath(path)) { Enabled = hasFile });
         _rowMenu.Items.Add(new ToolStripSeparator());
+        _rowMenu.Items.Add("Hide panel", null, (_, _) => HidePanel());
+        _rowMenu.Show(this, at);
+    }
+
+    // Right-click outside the rows: the same "Hide panel", but only when picked.
+    private void ShowPanelMenu(Point at)
+    {
+        _rowMenu?.Dispose();
+        _rowMenu = new ContextMenuStrip();
         _rowMenu.Items.Add("Hide panel", null, (_, _) => HidePanel());
         _rowMenu.Show(this, at);
     }

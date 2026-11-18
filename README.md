@@ -62,10 +62,36 @@ Windows `%LOCALAPPDATA%\Huginn`, Mac `~/Library/Application Support/Huginn`:
 On its first start the Windows app renamed `%LOCALAPPDATA%\Munin` to `%LOCALAPPDATA%\Huginn` (same drive, nothing
 copied) and left a junction at the old path. The Mac app moves the Swift app's `Models/` model up into the data folder.
 
+## Download
+
+Every green build is published as a release:
+
+- Mac: [Huginn-macOS.zip](https://github.com/BohdanRoshko/huginn/releases/latest/download/Huginn-macOS.zip)
+  (Apple Silicon, macOS 13 or newer)
+- Windows: [Huginn-Windows-x64.zip](https://github.com/BohdanRoshko/huginn/releases/latest/download/Huginn-Windows-x64.zip)
+  (Windows 10 1903 or newer, x64)
+
+All releases: [releases](https://github.com/BohdanRoshko/huginn/releases).
+
+## Install on Windows
+
+1. Install the **.NET 10 Desktop Runtime** once:
+   `winget install Microsoft.DotNet.DesktopRuntime.10`
+   (or the ".NET Desktop Runtime 10" x64 installer from https://dotnet.microsoft.com/download/dotnet/10.0).
+2. Unzip `Huginn-Windows-x64.zip` to a folder that stays, for example `%LOCALAPPDATA%\Programs\Huginn`.
+3. Run `Huginn.exe`. The app is not signed, so SmartScreen may warn: **More info → Run anyway**.
+4. A dot appears in the tray, and the recorder panel opens. The speech model (~1.6 GB) downloads on first use.
+   A GPU with a current Vulkan driver (NVIDIA, AMD or Intel) makes transcription fast; without one it falls back to
+   the CPU, which is much slower.
+5. To start it at logon: press Win+R, type `shell:startup`, and put a shortcut to `Huginn.exe` there.
+6. Kumospace: Huginn adds `--remote-debugging-port=9222` to the Kumospace shortcuts. If Kumospace was already
+   running, click **Kumospace: restart it…** in the tray menu once.
+
+Right-click the tray dot for the menu. Hold **Left Ctrl + Space** to dictate; **Dictation** in the menu turns it off.
+
 ## Install on a Mac
 
-1. Download `Huginn.zip` (the `Huginn-macOS` artifact of the latest green **Huginn** workflow run, or
-   `scripts\get-latest-build.ps1` on Windows), unzip it, drag **Huginn.app** into Applications.
+1. Download `Huginn-macOS.zip` (above), unzip it, drag **Huginn.app** into Applications.
 2. The app is ad-hoc signed, not notarized, so macOS blocks the first launch. Either open **System Settings → Privacy &
    Security** and click **Open Anyway**, or run once: `xattr -cr /Applications/Huginn.app`.
 3. Launch it. A waveform appears in the menu bar; Huginn is a menu bar app, as the Swift app was. The menu has

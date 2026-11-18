@@ -25,6 +25,9 @@ jobs:
   desktop:
     runs-on: macos-14
     timeout-minutes: 310
+    defaults:
+      run:
+        working-directory: mac-swift
 
     steps:
       - name: Checkout
@@ -34,7 +37,7 @@ jobs:
         id: whisper-cache
         uses: actions/cache@v4
         with:
-          path: prebuilt/whisper-cli
+          path: mac-swift/prebuilt/whisper-cli
           key: whisper-cli-${{ env.WHISPER_TAG }}-arm64-metal-v1
 
       - name: Build and assemble Huginn.app

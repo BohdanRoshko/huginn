@@ -3,6 +3,7 @@ name: Build Huginn
 on:
   push:
     branches: [main, master]
+    paths: ['mac-swift/**', '.github/workflows/build.yml']
   workflow_dispatch:
 
 env:
@@ -15,6 +16,11 @@ jobs:
   build:
     runs-on: macos-14
     timeout-minutes: 45
+    # The Swift app lives in mac-swift/; the repo also holds the Windows app,
+    # which this job never touches.
+    defaults:
+      run:
+        working-directory: mac-swift
 
     steps:
       - name: Checkout
@@ -33,7 +39,7 @@ jobs:
         id: whisper-cache
         uses: actions/cache@v4
         with:
-          path: prebuilt/whisper-cli
+          path: mac-swift/prebuilt/whisper-cli
           key: whisper-cli-${{ env.WHISPER_TAG }}-arm64-metal-v1
 
       # whisper.cpp is built here rather than pulled from Homebrew so Metal is
@@ -87,8 +93,8 @@ jobs:
             find build -maxdepth 3 -type f -perm +111 || true
             exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE/prebuilt"
-          cp "$BIN" "$GITHUB_WORKSPACE/prebuilt/whisper-cli"
+          mkdir -p "$GITHUB_WORKSPACE/mac-swift/prebuilt"
+          cp "$BIN" "$GITHUB_WORKSPACE/mac-swift/prebuilt/whisper-cli"
 
       # Runs on the cached path too, so a stale or truncated cache entry is
       # caught here rather than shipped inside the app.
@@ -266,7 +272,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Huginn-screenshots
-          path: shots/
+          path: mac-swift/shots/
           if-no-files-found: warn
 
       # Live capture is the ONE thing no other check can reach: it needs
@@ -322,5 +328,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Huginn-macOS
-          path: Huginn.zip
+          path: mac-swift/Huginn.zip
           if-no-files-found: error

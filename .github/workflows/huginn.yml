@@ -62,7 +62,16 @@ jobs:
         run: grep -rn -B2 -A2 "Dlsym" "$HOME"/.dotnet/packs/Microsoft.macOS.Sdk.net10.0_26.0/*/targets | sed 's#^.*/targets/##' | cut -c1-220
 
       - name: Build the Mac app
-        run: dotnet build mac/Huginn.Mac.csproj -c Release
+        run: |
+          set -o pipefail
+          dotnet build mac/Huginn.Mac.csproj -c Release -v:d > "$RUNNER_TEMP/build.log" 2>&1 || {
+            echo "--- where the whisper symbols come from ---"
+            grep -n -i "whisper_free\b\|ReferenceNativeSymbol\|RequiredSymbol\|__Internal\|Dlsym\|initial-undefines\|exported_symbols\|-u _whisper" "$RUNNER_TEMP/build.log" | cut -c1-400 | head -80
+            echo "--- errors ---"
+            grep -E ": error " "$RUNNER_TEMP/build.log" | sort -u | head -20
+            exit 1
+          }
+          tail -5 "$RUNNER_TEMP/build.log"
 
       - name: Find the bundle
         run: |

@@ -118,10 +118,11 @@ internal static class MeetingProcessor
     private static string SafeFileName(string? title)
     {
         if (string.IsNullOrWhiteSpace(title)) return "";
-        var invalid = Path.GetInvalidFileNameChars();
+        // Windows' set on every OS: macOS allows ':' and '?', so its own list would name the same meeting differently.
+        const string invalid = "<>:\"/\\|?*";
         var sb = new StringBuilder();
         foreach (var c in title.Trim())
-            sb.Append(Array.IndexOf(invalid, c) >= 0 ? ' ' : c);
+            sb.Append(invalid.Contains(c) || char.IsControl(c) ? ' ' : c);
         var s = System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ").Trim(' ', '.');
         return s.Length <= 80 ? s : s[..80].TrimEnd(' ', '.');
     }

@@ -1,0 +1,44 @@
+using System.Net.Http;
+using System.Net.Http.Json;
+using System.Text.Json;
+
+namespace Munin;
+
+/// <summary>What Odin made of a posted meeting transcript.</summary>
+internal sealed record OdinMeetingResult(string Classification, string Title, string Slug, int TaskCount, string? SecondaryType);
+
+/// <summary>
+/// Posts a finished meeting transcript to Odin's meeting agent (<c>POST /api/meetings/process</c>), which
+/// classifies it and files a meeting note + tasks (+ optional client-log/worklog). Best-effort and fully
+/// decoupled: if Odin is down this throws and Munin keeps the transcript file as the fallback.
+/// </summary>
+internal static class OdinClient
+{
+    // Analysis + ingest can take a while on a long transcript (local Claude pass); give it room.
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(300) };
+
+    /// <param name="notes">The lines typed in the panel while it recorded (<see cref="MeetingNotes"/>), or null.
+    /// Odin treats every line as a must-include and expands it from the transcript around its stamp.</param>
+    public static async Task<OdinMeetingResult> ProcessMeetingAsync(string transcript, string? date, string? notes, CancellationToken ct = default)
+    {
+        using var resp = await Http.PostAsJsonAsync(
+            $"{Config.OdinBaseUrl}/api/meetings/process", new { transcript, date, notes }, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Odin {(int)resp.StatusCode}: {Trunc(body)}");
+
+        using var doc = JsonDocument.Parse(body);
+        var r = doc.RootElement;
+        return new OdinMeetingResult(
+            Str(r, "classification"),
+            Str(r, "title"),
+            Str(r, "slug"),
+            r.TryGetProperty("taskCount", out var tc) && tc.TryGetInt32(out var n) ? n : 0,
+            r.TryGetProperty("secondaryType", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() : null);
+    }
+
+    private static string Str(JsonElement e, string p) =>
+        e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    private static string Trunc(string s) => s.Length <= 200 ? s : s[..200] + "…";
+}

@@ -22,7 +22,9 @@ internal static class SampleBuffers
         if (block == null || frames <= 0) return (Array.Empty<float>(), (int)a.SampleRate);
         var len = (int)block.DataLength;
         var bytes = new byte[len];
-        block.CopyDataBytes(0, (nuint)len, bytes); // VERIFY: CMBlockBuffer.CopyDataBytes(nuint, nuint, byte[])
+        var pin = System.Runtime.InteropServices.GCHandle.Alloc(bytes, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try { block.CopyDataBytes(0, (nuint)len, pin.AddrOfPinnedObject()); }
+        finally { pin.Free(); }
         bool isFloat = (a.FormatFlags & AudioFormatFlags.IsFloat) != 0;
         bool nonInterleaved = (a.FormatFlags & AudioFormatFlags.IsNonInterleaved) != 0;
         var mono = AudioBuffers.ToMono(bytes, frames, a.ChannelsPerFrame, isFloat, a.BitsPerChannel, nonInterleaved);
@@ -128,7 +130,7 @@ internal sealed class SystemAudioCapture : NSObject, ISCStreamOutput, ISCStreamD
             throw new InvalidOperationException($"System audio: {e1?.LocalizedDescription}");
         if (!stream.AddStreamOutput(this, SCStreamOutputType.Audio, _audioQueue, out var e2))
             throw new InvalidOperationException($"System audio: {e2?.LocalizedDescription}");
-        await stream.StartCaptureAsync();
+        await Completion(stream.StartCapture);
         _stream = stream;
     }
 
@@ -137,8 +139,20 @@ internal sealed class SystemAudioCapture : NSObject, ISCStreamOutput, ISCStreamD
         var s = _stream;
         _stream = null;
         if (s == null) return;
-        try { await s.StopCaptureAsync(); } catch (Exception ex) { HuginnLog.Write("system audio: stop failed", ex); }
+        try { await Completion(s.StopCapture); } catch (Exception ex) { HuginnLog.Write("system audio: stop failed", ex); }
         s.Dispose();
+    }
+
+    // SCStream's start/stop take a completion handler; this turns one into a Task that fails on an error.
+    private static Task Completion(Action<Action<NSError?>> call)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        call(error =>
+        {
+            if (error == null) tcs.TrySetResult();
+            else tcs.TrySetException(new InvalidOperationException(error.LocalizedDescription));
+        });
+        return tcs.Task;
     }
 
     [Export("stream:didOutputSampleBuffer:ofType:")]

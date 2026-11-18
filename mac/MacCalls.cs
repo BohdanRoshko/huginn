@@ -189,7 +189,7 @@ internal sealed class MacCallPrompt : ICallPrompt
 
         public override void DrawRect(CGRect dirtyRect)
         {
-            var pill = NSBezierPath.FromRoundedRect(new CGRect(0.5, 0.5, W - 1, H - 1), (H - 1) / 2, (H - 1) / 2);
+            var pill = NSBezierPath.FromRoundedRect(new CGRect(0.5, 0.5, W - 1, H - 1), (nfloat)((H - 1) / 2), (nfloat)((H - 1) / 2));
             C(37, 37, 37).SetFill();
             pill.Fill();
             C(255, 255, 255, 0.24).SetStroke();
@@ -203,7 +203,7 @@ internal sealed class MacCallPrompt : ICallPrompt
             C(25, 25, 25).SetFill();
             double[] bars = { 8, 16, 24, 14, 20, 10 };
             for (int i = 0; i < bars.Length; i++)
-                NSBezierPath.FromRoundedRect(new CGRect(tile.X + 7 + i * 3.8, tile.Y + (tile.Height - bars[i]) / 2, 2.4, bars[i]), 1.2, 1.2).Fill();
+                NSBezierPath.FromRoundedRect(new CGRect(tile.X + 7 + i * 3.8, tile.Y + (tile.Height - bars[i]) / 2, 2.4, bars[i]), (nfloat)1.2, (nfloat)1.2).Fill();
 
             var tx = tile.Right + 12;
             new NSAttributedString("Start Meeting Recording", new NSStringAttributes
@@ -212,7 +212,7 @@ internal sealed class MacCallPrompt : ICallPrompt
             }).DrawAtPoint(new CGPoint(tx, 11));
             new NSAttributedString($"{App} detected", new NSStringAttributes
             {
-                Font = NSFont.SystemFontOfSize(11.5), ForegroundColor = C(165, 165, 165),
+                Font = NSFont.SystemFontOfSize((nfloat)11.5), ForegroundColor = C(165, 165, 165),
             }).DrawAtPoint(new CGPoint(tx, 31));
 
             C(35, 131, 226).SetFill();
@@ -229,7 +229,7 @@ internal sealed class MacCallPrompt : ICallPrompt
             var size = label.Size;
             label.DrawAtPoint(new CGPoint(Main.X + (Main.Width - size.Width) / 2 + 2, Main.Y + (Main.Height - size.Height) / 2));
             NSColor.White.SetStroke();
-            var chevron = new NSBezierPath { LineWidth = 1.6, LineCapStyle = NSLineCapStyle.Round, LineJoinStyle = NSLineJoinStyle.Round };
+            var chevron = new NSBezierPath { LineWidth = (nfloat)1.6, LineCapStyle = NSLineCapStyle.Round, LineJoinStyle = NSLineJoinStyle.Round };
             var cx = Arrow.X + Arrow.Width / 2; var cy = Arrow.Y + Arrow.Height / 2;
             chevron.MoveTo(new CGPoint(cx - 4.5, cy - 2));
             chevron.LineTo(new CGPoint(cx, cy + 2.5));

@@ -28,7 +28,7 @@ jobs:
         run: dotnet build windows/Huginn.csproj -c Release
 
   mac:
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

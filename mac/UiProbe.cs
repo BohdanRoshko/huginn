@@ -21,8 +21,13 @@ internal static class UiProbe
 
         if (mode == "menu")
         {
-            // Open the menu a moment after launch; it stays open (menu tracking) until the probe kills the app.
-            NSTimer.CreateScheduledTimer(3, _ => item.Button.PerformClick(null));
+            // Open the menu a moment after launch; it stays open (menu tracking) until the probe kills the app. A click on
+            // the status button does not open it on the CI runner, so pop the same menu up under the menu bar instead.
+            NSTimer.CreateScheduledTimer(3, _ =>
+            {
+                var frame = (NSScreen.MainScreen ?? NSScreen.Screens[0]).Frame;
+                item.Menu?.PopUpMenu(null, new CoreGraphics.CGPoint(frame.Width - 460, frame.Height - 28), null);
+            });
             return;
         }
 

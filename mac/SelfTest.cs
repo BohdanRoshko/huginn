@@ -21,8 +21,10 @@ internal static class SelfTest
             Console.WriteLine($"self-test {mode}: data folder {Paths.BaseDir()}");
             return mode switch
             {
-                "transcribe" => Transcribe().GetAwaiter().GetResult(),
-                "capture" => Capture().GetAwaiter().GetResult(),
+                // On the thread pool: NSApplication.Init gives the main thread a SynchronizationContext, so waiting on
+                // it here while the awaits try to resume on it would deadlock.
+                "transcribe" => Task.Run(Transcribe).GetAwaiter().GetResult(),
+                "capture" => Task.Run(Capture).GetAwaiter().GetResult(),
                 _ => 4,
             };
         }

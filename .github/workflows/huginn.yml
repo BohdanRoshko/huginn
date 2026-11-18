@@ -93,6 +93,7 @@ jobs:
       # The runner is a real Apple Silicon Mac: push known speech through the SHIPPED app, dictation and the whole
       # meeting pipeline. base.en sits under the production file name to keep the download small.
       - name: Self-test transcription
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           export HUGINN_DATA_DIR="$RUNNER_TEMP/huginn-data"
@@ -109,6 +110,7 @@ jobs:
 
       - name: Photograph the windows
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           set -uo pipefail
           export HUGINN_DATA_DIR="$RUNNER_TEMP/huginn-ui"

@@ -31,10 +31,21 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Whisper's native build: for a -macos target this package adds only the macOS libraries (Metal on arm64). -->
-    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <!-- Whisper's native build (Metal on arm64). Its build targets are NOT imported: they make the macOS SDK link
+         libwhisper at build time, and the linker then demands functions the Mac build lacks (OpenVINO). Whisper.net
+         loads the library itself at run time, so the target below just copies the files into the bundle. -->
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" ExcludeAssets="build;buildTransitive" GeneratePathProperty="true" />
     <!-- The cleanup LLM's native build for Apple Silicon (Metal). -->
     <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.25.0" />
   </ItemGroup>
+
+  <!-- Contents/MonoBundle is the app's base directory; Whisper.net looks for runtimes/macos-arm64 under it. -->
+  <Target Name="CopyWhisperNatives" AfterTargets="Build" Condition="'$(AppBundleDir)' != ''">
+    <ItemGroup>
+      <WhisperNative Include="$(PkgWhisper_net_Runtime)/build/macos-arm64/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WhisperNative)" DestinationFolder="$(AppBundleDir)/Contents/MonoBundle/runtimes/macos-arm64" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="Whisper natives copied: @(WhisperNative->'%(Filename)%(Extension)', ', ')" />
+  </Target>
 
 </Project>

@@ -41,13 +41,17 @@ button { font: inherit; color: inherit; }
 .page { flex: 1 1 auto; overflow-y: auto; scrollbar-gutter: stable; }
 .page::-webkit-scrollbar { width: 10px; } .page::-webkit-scrollbar-thumb { background: var(--active); border-radius: 5px; }
 .title { margin: 0; padding: 40px var(--gutter) 0; font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; color: var(--text-strong); text-wrap: balance; }
-.mn-props { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 12px var(--gutter) 0; }
+/* A fixed grid, so Event and Source stay in place however many attendees there are (Bohdan, 2026-11-20): the
+   attendees column takes the rest of the width and wraps inside itself. */
+.mn-props { display: grid; grid-template-columns: 136px minmax(0, 1fr) 112px 112px; gap: 12px 24px; padding: 12px var(--gutter) 0; }
+@media (max-width: 620px) { .mn-props { grid-template-columns: 1fr 1fr; } }
+.mn-people { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .mn-prop { display: flex; flex-direction: column; gap: 6px; min-width: 0; max-width: 100%; }
 .mn-key { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: rgba(255,255,255,.62); }
 .mn-key svg { color: rgba(255,255,255,.62); }
 .mn-value { font-size: 14px; font-weight: 600; color: var(--text); padding-block: 2px; }
 .mn-empty { font-size: 14px; color: var(--faint); padding-block: 2px; }
-.mn-people { display: flex; flex-wrap: wrap; gap: 4px 12px; max-width: 360px; }
+
 .mn-person { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text); padding-block: 2px; }
 .mn-more { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; margin-left: -6px; border: none; border-radius: 4px; background: transparent; color: var(--muted); font-size: 14px; cursor: pointer; }
 .mn-more:hover { background: var(--hover); color: var(--text); }

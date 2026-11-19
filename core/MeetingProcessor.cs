@@ -73,6 +73,7 @@ internal static class MeetingProcessor
         var timeline = SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp));
         var text = timeline == null ? reconciled.Text
             : NameSpeakers(reconciled.Text, kept.Where(k => k.speaker == "Them").Select(k => (k.start, themEnds.GetValueOrDefault((k.start, k.text), k.start))).ToList(), timeline, cap.Stamp);
+        if (timeline != null && timeline.Events.Count > 0) text = AddEvents(text, timeline.Events);
         var echo = new EchoReport(me.Count, verdict.Silent, verdict.Echo, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagConfidence);
 
         var transcriptPath = TranscriptPathFor(cap.Stamp, null);
@@ -206,6 +207,52 @@ internal static class MeetingProcessor
         }
         return string.Join("\n", lines);
     }
+
+    /// <summary>Puts what people did into the transcript, each at its time, as a line that starts with "*":
+    /// <c>[00:12:34] * Andy reacted 👍</c>, <c>* Andy raised a hand</c>, <c>* Andy typed: "…"</c>,
+    /// <c>* Andy started sharing their screen</c>, <c>* Snapshot of Andy's screen: shot-001.jpg</c>.
+    /// The de-echo and the speaker names only read "Me"/"Them" lines, so these pass through both.</summary>
+    internal static string AddEvents(string text, IReadOnlyList<object[]> events)
+    {
+        var lines = text.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').ToList();
+        var stamped = new System.Text.RegularExpressions.Regex(@"^\s*\[(\d{1,2}):(\d{2}):(\d{2})\]");
+        long Sec(string l)
+        {
+            var m = stamped.Match(l);
+            return m.Success ? int.Parse(m.Groups[1].Value) * 3600 + int.Parse(m.Groups[2].Value) * 60 + int.Parse(m.Groups[3].Value) : -1;
+        }
+        var ordered = events.Select(e => (off: Convert.ToInt64(e[0]), kind: e[1]?.ToString() ?? "", who: e[2]?.ToString() ?? "", what: e[3]?.ToString() ?? ""))
+            .OrderBy(e => e.off).ToList();
+        int at = lines.FindIndex(l => Sec(l) >= 0);
+        if (at < 0)
+        {
+            if (lines.Count > 0 && lines[^1].StartsWith("(no speech")) lines.RemoveAt(lines.Count - 1);
+            at = lines.Count;
+        }
+        foreach (var e in ordered)
+        {
+            var line = EventLine(e.kind, e.who.Length > 0 ? e.who : "Someone", e.what);
+            if (line == null) continue;
+            long sec = e.off / 1000;
+            // After every line stamped at or before the event's second.
+            while (at < lines.Count && (Sec(lines[at]) < 0 ? true : Sec(lines[at]) <= sec)) at++;
+            var t = TimeSpan.FromSeconds(sec);
+            lines.Insert(at++, $"[{(int)t.TotalHours:D2}:{t.Minutes:D2}:{t.Seconds:D2}] * {line}");
+        }
+        return string.Join("\n", lines) + "\n";
+    }
+
+    private static string? EventLine(string kind, string who, string what) => kind switch
+    {
+        "react" when what.Length > 0 => $"{who} reacted {what}",
+        "hand-up" => $"{who} raised a hand",
+        "hand-down" => $"{who} lowered a hand",
+        "share-start" => $"{who} started sharing their screen",
+        "share-stop" => $"{who} stopped sharing their screen",
+        "chat" when what.Trim().Length > 0 => $"{who} typed: \"{System.Text.RegularExpressions.Regex.Replace(what.Trim(), @"\s*\r?\n\s*", " / ")}\"",
+        "shot" when what.Length > 0 => $"Snapshot of {who}'s screen: {what}",
+        _ => null,
+    };
 
     private static bool HasAudio(string path)
     {

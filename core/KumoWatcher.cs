@@ -7,6 +7,13 @@ namespace Huginn;
 /// <summary>A person in the Kumospace space. <see cref="Id"/> is the census id (Daily's user_id).</summary>
 internal sealed record KumoPerson(string Id, string Name);
 
+/// <summary>Something a person did in the call: <see cref="Kind"/> is react, hand-up, hand-down, share-start,
+/// share-stop or chat; <see cref="Text"/> is the emoji or the chat message.</summary>
+internal sealed record KumoEvent(long T, string Kind, string Who, string Text);
+
+/// <summary>A snapshot of a shared screen: a JPEG, taken when the screen settled on something new.</summary>
+internal sealed record KumoShot(long T, string Who, byte[] Jpeg);
+
 /// <summary>One read of the Kumospace page (<c>KumoProbe.js</c>). <see cref="Samples"/> are the remote audio levels
 /// buffered since the last read, keyed by Daily session id; <see cref="Local"/> is my own level as Kumospace sends it.</summary>
 internal sealed record KumoSnapshot(
@@ -20,7 +27,9 @@ internal sealed record KumoSnapshot(
     IReadOnlyList<(long T, IReadOnlyDictionary<string, double> Levels)> Samples,
     IReadOnlyList<(long T, double Level)> Local,
     bool InSpace = true,
-    string Availability = "")
+    string Availability = "",
+    IReadOnlyList<KumoEvent>? Events = null,
+    IReadOnlyList<KumoShot>? Shots = null)
 {
     public bool InCall => CallState == "joined-meeting";
 
@@ -201,6 +210,21 @@ internal sealed class KumoWatcher : IDisposable
             foreach (var row in l.EnumerateArray())
                 if (row.ValueKind == JsonValueKind.Array && row.GetArrayLength() >= 2) local.Add((row[0].GetInt64(), row[1].GetDouble()));
 
+        var events = new List<KumoEvent>();
+        if (v.TryGetProperty("events", out var ev) && ev.ValueKind == JsonValueKind.Array)
+            foreach (var row in ev.EnumerateArray())
+                if (row.ValueKind == JsonValueKind.Array && row.GetArrayLength() >= 5 && row[0].TryGetInt64(out var et))
+                    events.Add(new KumoEvent(et, row[1].GetString() ?? "", row[3].GetString() ?? "", row[4].GetString() ?? ""));
+
+        var shots = new List<KumoShot>();
+        if (v.TryGetProperty("shots", out var sh) && sh.ValueKind == JsonValueKind.Array)
+            foreach (var row in sh.EnumerateArray())
+            {
+                if (row.ValueKind != JsonValueKind.Array || row.GetArrayLength() < 4 || !row[0].TryGetInt64(out var st)) continue;
+                try { shots.Add(new KumoShot(st, row[2].GetString() ?? "", Convert.FromBase64String(row[3].GetString() ?? ""))); }
+                catch (FormatException) { /* a broken frame is skipped */ }
+            }
+
         return new KumoSnapshot(
             v.TryGetProperty("t", out var t) && t.TryGetInt64(out var tt) ? tt : 0,
             Str(v, "callState"),
@@ -210,7 +234,8 @@ internal sealed class KumoWatcher : IDisposable
             People(v, "roomMates", "id"),
             names, samples, local,
             !v.TryGetProperty("inSpace", out var ins) || ins.ValueKind != JsonValueKind.False,
-            Str(v, "availability"));
+            Str(v, "availability"),
+            events, shots);
     }
 
     private static string Str(JsonElement e, string p) =>

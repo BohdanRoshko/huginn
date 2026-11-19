@@ -19,18 +19,53 @@ internal sealed class SpeakerTimeline
     public List<object[]> Remote { get; set; } = new();
     /// <summary>[offset ms, level]: my own level as Kumospace sends it.</summary>
     public List<object[]> Local { get; set; } = new();
+    /// <summary>[offset ms, kind, who, text]: reactions, hands, screen shares, chat, and snapshots ("shot", text =
+    /// the snapshot's name). The transcript step writes each as a line of its own.</summary>
+    public List<object[]> Events { get; set; } = new();
 
     private readonly List<(long T, string Name, double Level)> _remote = new();
 
     public static string PathFor(string stamp) => Path.Combine(Paths.MeetingsDir(), $"{stamp}_speakers.json");
 
+    /// <summary>Where a snapshot is kept next to the WAVs: <c>{stamp}_shot-001.jpg</c>. The transcript names it
+    /// <c>shot-001.jpg</c>.</summary>
+    public static string ShotPath(string stamp, string name) => Path.Combine(Paths.MeetingsDir(), $"{stamp}_{name}");
+
+    /// <summary>Every snapshot file of a recording, for delete and upload.</summary>
+    public static IEnumerable<string> ShotFiles(string stamp)
+    {
+        try { return Directory.EnumerateFiles(Paths.MeetingsDir(), $"{stamp}_shot-*.jpg").ToList(); }
+        catch { return Array.Empty<string>(); }
+    }
+
+    public bool HasContent => Rooms.Count > 0 || People.Count > 0 || Remote.Count > 0 || Events.Count > 0;
+
+    private int _shots;
+
     public static SpeakerTimeline Begin(DateTime startedLocal) =>
         new() { StartUnixMs = new DateTimeOffset(startedLocal).ToUnixTimeMilliseconds() };
 
-    /// <summary>Takes one read's samples and who was there.</summary>
-    public void Add(KumoSnapshot snap)
+    /// <summary>Takes one read's samples, who was there, what they did, and saves its snapshots under <paramref name="stamp"/>.</summary>
+    public void Add(KumoSnapshot snap, string stamp)
     {
         if (!snap.InCall) return;
+        foreach (var e in snap.Events ?? Array.Empty<KumoEvent>())
+        {
+            long off = e.T - StartUnixMs;
+            if (off >= -2000) Events.Add(new object[] { Math.Max(0, off), e.Kind, e.Who, e.Text });
+        }
+        foreach (var shot in snap.Shots ?? Array.Empty<KumoShot>())
+        {
+            long off = shot.T - StartUnixMs;
+            if (off < 0 || _shots >= 500) continue;
+            var name = $"shot-{++_shots:D3}.jpg";
+            try
+            {
+                File.WriteAllBytes(ShotPath(stamp, name), shot.Jpeg);
+                Events.Add(new object[] { off, "shot", shot.Who, name });
+            }
+            catch (Exception ex) { HuginnLog.Write($"meeting {stamp}: snapshot not saved", ex); }
+        }
         if (!string.IsNullOrEmpty(snap.Me?.Name)) Me = snap.Me!.Name;
         if (snap.Zone.Length > 0 && !Rooms.Contains(snap.Zone)) Rooms.Add(snap.Zone);
         foreach (var p in snap.Company)
@@ -80,6 +115,10 @@ internal sealed class SpeakerTimeline
             };
             foreach (var row in r.GetProperty("Remote").EnumerateArray())
                 tl._remote.Add((row[0].GetInt64(), row[1].GetString() ?? "", row[2].GetDouble()));
+            if (r.TryGetProperty("Events", out var evs) && evs.ValueKind == JsonValueKind.Array)
+                foreach (var row in evs.EnumerateArray())
+                    if (row.GetArrayLength() >= 4)
+                        tl.Events.Add(new object[] { row[0].GetInt64(), row[1].GetString() ?? "", row[2].GetString() ?? "", row[3].GetString() ?? "" });
             return tl;
         }
         catch (Exception ex)

@@ -21,7 +21,7 @@ public class SpeakerNamesTests
             new[] { alex, sam }, Array.Empty<KumoPerson>(),
             new Dictionary<string, string> { ["sj"] = "Alex Moore", ["sg"] = "Sam Lee" },
             samples, new List<(long, double)>());
-        tl.Add(snap);
+        tl.Add(snap, "test");
         return tl;
     }
 

@@ -565,7 +565,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private static void DeleteCapture(MeetingCapture? cap)
     {
         if (cap == null) return;
-        foreach (var path in new[] { cap.MicPath, cap.LoopPath, cap.NotesPath, SpeakerTimeline.PathFor(cap.Stamp), MeetingProcessor.SourcePathFor(cap.Stamp) })
+        foreach (var path in new[] { cap.MicPath, cap.LoopPath, cap.NotesPath, SpeakerTimeline.PathFor(cap.Stamp), MeetingProcessor.SourcePathFor(cap.Stamp) }.Concat(SpeakerTimeline.ShotFiles(cap.Stamp)))
         {
             try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
         }
@@ -576,7 +576,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     {
         var tl = _timeline;
         _timeline = null;
-        if (cap == null || tl == null || (tl.Rooms.Count == 0 && tl.People.Count == 0 && tl.Remote.Count == 0)) return;
+        if (cap == null || tl == null || !tl.HasContent) return;
         tl.Save(SpeakerTimeline.PathFor(cap.Stamp));
     }
 
@@ -647,6 +647,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                     HuginnLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
                     if (!string.IsNullOrWhiteSpace(odin.Title)) Recent.SetTitle(jobId, odin.Title);
                     Recent.SetOdinSlug(jobId, odin.Slug);
+                    await UploadShotsAsync(cap.Stamp, odin.Slug, cts.Token);
                     Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
                     Ui(() => _p.Notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {odin.Title}"));
                 }
@@ -687,6 +688,25 @@ internal sealed class HuginnEngine : IAsyncDisposable
             Interlocked.Decrement(ref _processingCount);
             UpdatePriority();
         }
+    }
+
+    // The screen snapshots go up after the note is filed, one by one; a failure loses only the pictures.
+    private static async Task UploadShotsAsync(string stamp, string slug, CancellationToken ct)
+    {
+        var files = SpeakerTimeline.ShotFiles(stamp).ToList();
+        if (files.Count == 0 || string.IsNullOrWhiteSpace(slug)) return;
+        int sent = 0;
+        foreach (var f in files)
+        {
+            try
+            {
+                await OdinClient.UploadShotAsync(slug, Path.GetFileName(f)[(stamp.Length + 1)..], await File.ReadAllBytesAsync(f, ct), ct);
+                sent++;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { HuginnLog.Write($"meeting {stamp}: snapshot {Path.GetFileName(f)} not sent", ex); }
+        }
+        HuginnLog.Write($"meeting {stamp}: sent {sent} of {files.Count} snapshot(s) to Odin");
     }
 
     private static string FileSize(string path)
@@ -913,7 +933,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                 KumoStatusText = KumoWatchingText();
                 _shell.Refresh();
             }
-            if (_p.Meeting.IsRecording) _timeline?.Add(snap);
+            if (_p.Meeting.IsRecording && _current is { } cur) _timeline?.Add(snap, cur.Stamp);
         }
         var (action, reason) = _detector.Tick(now, snap, _p.Meeting.IsRecording);
         // Asked about a Kumospace meeting and now nobody is around: the question is moot.

@@ -37,6 +37,17 @@ internal static class OdinClient
             r.TryGetProperty("secondaryType", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() : null);
     }
 
+    /// <summary>Stores one screen snapshot next to a filed meeting's transcript (<c>PUT /api/notes/{slug}/shots/{name}</c>).
+    /// One request per image, so a long meeting never makes one huge body.</summary>
+    public static async Task UploadShotAsync(string slug, string name, byte[] jpeg, CancellationToken ct = default)
+    {
+        using var content = new ByteArrayContent(jpeg);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
+        using var resp = await Http.PutAsync($"{Config.OdinBaseUrl}/api/notes/{Uri.EscapeDataString(slug)}/shots/{Uri.EscapeDataString(name)}", content, ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Odin {(int)resp.StatusCode}: {Trunc(await resp.Content.ReadAsStringAsync(ct))}");
+    }
+
     /// <summary>The slug of the meeting note Odin filed under this title, for meetings filed before Huginn kept the
     /// slug: Odin's note search, newest first, and the row whose title matches exactly. Null when none does.</summary>
     public static async Task<string?> FindMeetingSlugAsync(string title, CancellationToken ct = default)

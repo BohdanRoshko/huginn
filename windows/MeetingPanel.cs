@@ -180,7 +180,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     /// <summary>Push a live input level (0..1) into the meter. Thread-safe (single float write).</summary>
     public void SetLevel(float level01)
     {
-        float v = Math.Clamp((float)Math.Sqrt(Math.Max(0f, level01)) * 1.6f, 0f, 1f);
+        float v = Math.Clamp((float)Math.Sqrt(Math.Max(0f, level01)) * 2.4f, 0f, 1f); // normal speech reaches most of the well
         if (v > _incoming) _incoming = v;
     }
 
@@ -325,8 +325,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
         {
             float lvl = _wave[_wave.Length - n + i];
             float h = Math.Max(2f, lvl * maxH);
-            int a = 26 + (int)(190 * Math.Min(1f, lvl));
-            using var br = new SolidBrush(_recording ? Color.FromArgb(a, 255, 196, 196) : Color.FromArgb(a, 232, 232, 236));
+            int a = 60 + (int)(195 * Math.Min(1f, lvl));
+            using var br = new SolidBrush(Color.FromArgb(a, 240, 240, 242));
             using var bar = Rounded(new RectangleF(x0 + i * step, cy - h / 2f, barW, h), 1.5f);
             g.FillPath(br, bar);
         }

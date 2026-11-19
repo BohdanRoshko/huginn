@@ -24,11 +24,17 @@ internal sealed class MeetingWindow : Form
         Text = "Meetings";
         BackColor = System.Drawing.Color.FromArgb(25, 25, 25);
         StartPosition = FormStartPosition.Manual;
-        var wa = Screen.FromRectangle(near).WorkingArea;
         float k = DeviceDpi / 96f;
-        int w = Math.Min(wa.Width, (int)(DrawerWidth * k)), h = wa.Height - (int)(32 * k);
-        Bounds = new System.Drawing.Rectangle(wa.Right - w - (int)(16 * k), wa.Top + (int)(16 * k), w, h);
         MinimumSize = new System.Drawing.Size((int)(420 * k), (int)(360 * k));
+        // Where it was last left (size, place, maximized), else the drawer's width and at most 880 px tall, at the
+        // top right of the recorder panel's screen: a tall or portrait screen made a full-height window too tall.
+        if (!LoadBounds())
+        {
+            var wa = Screen.FromRectangle(near).WorkingArea;
+            int w = Math.Min(wa.Width, (int)(DrawerWidth * k)), h = Math.Min(wa.Height - (int)(32 * k), (int)(880 * k));
+            Bounds = new System.Drawing.Rectangle(wa.Right - w - (int)(16 * k), wa.Top + (int)(16 * k), w, h);
+        }
+        FormClosing += (_, _) => SaveBounds();
         try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { /* the default icon */ }
         Controls.Add(_web);
         _ = InitAsync();
@@ -86,6 +92,29 @@ internal sealed class MeetingWindow : Form
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         if (!Visible) Show();
         Activate();
+    }
+
+    private static string BoundsFile => Paths.File("meeting_window.txt");
+
+    private void SaveBounds()
+    {
+        var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        try { File.WriteAllText(BoundsFile, $"{b.X},{b.Y},{b.Width},{b.Height},{(WindowState == FormWindowState.Maximized ? 1 : 0)}"); }
+        catch { /* the next window opens at the default place */ }
+    }
+
+    private bool LoadBounds()
+    {
+        try
+        {
+            var p = File.ReadAllText(BoundsFile).Split(',').Select(int.Parse).ToArray();
+            var b = new System.Drawing.Rectangle(p[0], p[1], p[2], p[3]);
+            if (!Screen.AllScreens.Any(sc => sc.WorkingArea.IntersectsWith(new System.Drawing.Rectangle(b.X, b.Y, b.Width, 40)))) return false;
+            Bounds = b;
+            if (p.Length > 4 && p[4] == 1) WindowState = FormWindowState.Maximized;
+            return true;
+        }
+        catch { return false; }
     }
 
     private void Send(string json) => _ = _web.CoreWebView2.ExecuteScriptAsync($"window.huginnOpen({json})");

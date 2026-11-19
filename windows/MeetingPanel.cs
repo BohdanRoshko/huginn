@@ -97,7 +97,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
     private const int BaseH = 112;
     private const int MeterCy = 61;   // mic-level meter center: the band between the header and the list
-    private const int MeterMaxH = 30; // bar height at full level; the band runs 46..76
+    private const int MeterMaxH = 22; // bar height at full level: room above and below inside the 32 px well
     private const int JobsDividerY = 80;
     private const int JobsTop = 80;    // row content starts 4 px higher than the lines: half the top padding moved to the bottom
     private const int RowH = 38;       // original recent-row height (the header, not the rows, was trimmed)

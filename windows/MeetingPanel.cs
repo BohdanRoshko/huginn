@@ -25,7 +25,8 @@ namespace Huginn;
 ///
 /// It is an ordinary window, not always on top (Bohdan, 2026-11-20): other windows can cover it, and the tray icon
 /// brings it back. Depth comes from layers, not lines: Windows rounds it and gives it a shadow, the level meter
-/// sits in a darker well, and the recordings sit on a slightly raised surface whose rows light up under the mouse.
+/// sits in a darker well, and thin lines part the recordings, whose rows light up under the mouse. A row's second
+/// line is the 24-hour time and the status as chips (Bohdan, 2026-11-20).
 /// </summary>
 internal sealed class MeetingPanel : Form, IRecorderView
 {
@@ -75,13 +76,15 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private readonly Font _rowNameFont = new("Segoe UI Semibold", 9f);
     private readonly Font _rowMetaFont = new("Segoe UI", 8f);
 
-    // Surfaces, darkest to lightest: the meter well, the panel, the list surface, a hovered row.
+    // Surfaces, darkest to lightest: the meter well, the panel, a hovered row.
     private static readonly Color Well = Color.FromArgb(24, 24, 25);
     private static readonly Color Bg = Color.FromArgb(32, 32, 33);           // #202021, the pop-up's surface
-    private static readonly Color Raised = Color.FromArgb(38, 38, 39);
     private static readonly Color RowHover = Color.FromArgb(46, 46, 47);
     private static readonly Color Border = Color.FromArgb(20, 255, 255, 255);
     private static readonly Color WellEdge = Color.FromArgb(10, 255, 255, 255);
+    private static readonly Color RowLine = Color.FromArgb(16, 255, 255, 255);
+    private static readonly Color ChipBg = Color.FromArgb(16, 255, 255, 255);
+    private static readonly Color ChipText = Color.FromArgb(170, 170, 174);
     private static readonly Color TitleCol = Color.FromArgb(234, 234, 236);
     private static readonly Color RowName = Color.FromArgb(214, 214, 218);
     private static readonly Color Muted = Color.FromArgb(140, 140, 144);
@@ -249,12 +252,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
             g.FillEllipse(dot, IconTile.Right - 5, IconTile.Y - 1, 7, 7);
         }
 
-        TextRenderer.DrawText(g, "Meeting", _titleFont, new Point(46, 14), TitleCol, TextFormatFlags.NoPrefix);
         if (_recording)
-        {
-            int tw = TextRenderer.MeasureText(g, "Meeting", _titleFont).Width;
-            TextRenderer.DrawText(g, $"·  REC  {Elapsed()}", _subFont, new Point(46 + tw + 6, 16), Red, TextFormatFlags.NoPrefix);
-        }
+            TextRenderer.DrawText(g, $"REC  {Elapsed()}", _titleFont, new Point(46, 14), Red, TextFormatFlags.NoPrefix);
 
         DrawActionPill(g, Pill, _recording);
         if (_recording) DrawTrash(g, TrashRect, _discardHover, _discardArmed);
@@ -337,11 +336,10 @@ internal sealed class MeetingPanel : Form, IRecorderView
     {
         // Fixed-size panel: always the divider + DisplayMax row slots. A slot with a recording renders it;
         // an empty slot renders a skeleton placeholder so the window is a constant height regardless of count.
-        // The recordings sit on a surface one step lighter than the panel, inset 8 px and rounded like the window, so
-        // the list reads as its own layer without a divider line.
-        var surface = new Rectangle(8, JobsDividerY, Width - 16, Height - JobsDividerY - 8);
-        using (var sp = Rounded(surface, 8))
-        using (var sb = new SolidBrush(Raised)) g.FillPath(sb, sp);
+        // A thin line between rows, so the buttons on the right are easy to match to their meeting.
+        using (var lp = new Pen(RowLine))
+            for (int i = 1; i < DisplayMax; i++)
+                g.DrawLine(lp, 16, JobsTop + i * RowH - 1, Width - 16, JobsTop + i * RowH - 1);
 
         for (int i = 0; i < DisplayMax; i++)
         {
@@ -350,7 +348,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
             {
                 if (i == _hoverRow && _editingId == -1)
                 {
-                    using var hp = Rounded(new Rectangle(12, top, Width - 24, RowH - 2), 6);
+                    using var hp = Rounded(new Rectangle(10, top + 1, Width - 20, RowH - 3), 6);
                     using var hb = new SolidBrush(RowHover);
                     g.FillPath(hb, hp);
                 }
@@ -380,14 +378,41 @@ internal sealed class MeetingPanel : Form, IRecorderView
         TextRenderer.DrawText(g, name, _rowNameFont, new Rectangle(34, top + 4, nameW, 16), nameCol,
             TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
-        // Line 2 = recorded time, plus the status when the name line is already the title.
-        string meta = entry.Title != null ? $"{entry.Started:h:mm tt}  ·  {entry.Status}" : $"{entry.Started:h:mm tt}";
-        TextRenderer.DrawText(g, meta, _rowMetaFont, new Rectangle(34, top + 21, nameW, 14), Muted,
-            TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        // Line 2 = the 24-hour time, then the status as chips when the name line is already the title.
+        var time = entry.Started.ToString("HH:mm");
+        TextRenderer.DrawText(g, time, _rowMetaFont, new Rectangle(34, top + 21, 40, 14), Muted,
+            TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.NoPadding);
+        if (entry.Title != null)
+        {
+            int x = 34 + TextRenderer.MeasureText(g, time, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width + 8;
+            foreach (var chip in StatusChips(entry.Status))
+            {
+                int w = TextRenderer.MeasureText(g, chip, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width + 12;
+                if (x + w > 34 + nameW) break;
+                var r = new Rectangle(x, top + 20, w, 15);
+                using (var cp = Rounded(r, 4))
+                using (var cb = new SolidBrush(ChipBg)) g.FillPath(cb, cp);
+                TextRenderer.DrawText(g, chip, _rowMetaFont, r, ChipText,
+                    TextFormatFlags.NoPrefix | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+                x += w + 4;
+            }
+        }
 
         if (cancelable) DrawCancel(g, CancelRect(i), entry.Id == _hoverCancelId);
         else if (copyable) DrawCopy(g, CancelRect(i), entry.Id == _hoverCopyId, entry.Id == _copiedId);
         if (odin) DrawOpenOdin(g, OdinRect(i), entry.Id == _hoverOdinId);
+    }
+
+    // "✓ internal-dev · 1 task(s)" → [internal-dev] [1 task]; "Saved · Odin offline" → [Saved] [Odin offline].
+    internal static IEnumerable<string> StatusChips(string status)
+    {
+        foreach (var raw in status.Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var part = raw.TrimStart('✓', ' ');
+            var tasks = System.Text.RegularExpressions.Regex.Match(part, @"^(\d+) task\(s\)$");
+            if (tasks.Success) part = tasks.Groups[1].Value == "1" ? "1 task" : $"{tasks.Groups[1].Value} tasks";
+            if (part.Length > 0) yield return part;
+        }
     }
 
     // A meeting Odin filed (it has the note's slug, or the title Odin gave it) can be opened there.
@@ -435,7 +460,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         }
         using var pen = new Pen(hover ? TitleCol : Muted, 1.3f);
         using (var back = Rounded(new RectangleF(cx - 2.5f, cy - 5.5f, 8, 8), 1.8f)) g.DrawPath(pen, back);
-        using (var fill = new SolidBrush(_hoverRow >= 0 && _hoverRow < _entries.Count && CancelRect(_hoverRow).Contains(hit.Location) ? RowHover : Raised))
+        using (var fill = new SolidBrush(_hoverRow >= 0 && _hoverRow < _entries.Count && CancelRect(_hoverRow).Contains(hit.Location) ? RowHover : Bg))
         using (var front = Rounded(new RectangleF(cx - 5.5f, cy - 2.5f, 8, 8), 1.8f))
         {
             g.FillPath(fill, front); // hides the back square's corner behind the front one

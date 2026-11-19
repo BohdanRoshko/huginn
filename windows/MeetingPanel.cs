@@ -99,9 +99,9 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private const int MeterCy = 61;   // mic-level meter center: the band between the header and the list
     private const int MeterMaxH = 30; // bar height at full level; the band runs 46..76
     private const int JobsDividerY = 80;
-    private const int JobsTop = 84;
+    private const int JobsTop = 80;    // row content starts 4 px higher than the lines: half the top padding moved to the bottom
     private const int RowH = 38;       // original recent-row height (the header, not the rows, was trimmed)
-    private const int BottomPad = 8;
+    private const int BottomPad = 12;
 
     public MeetingPanel(RecentMeetings recent)
     {
@@ -339,7 +339,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         // A thin line between rows, so the buttons on the right are easy to match to their meeting.
         using (var lp = new Pen(RowLine))
             for (int i = 1; i < DisplayMax; i++)
-                g.DrawLine(lp, 16, JobsTop + i * RowH - 1, Width - 16, JobsTop + i * RowH - 1);
+                g.DrawLine(lp, 16, JobsTop + i * RowH + 3, Width - 16, JobsTop + i * RowH + 3);
 
         for (int i = 0; i < DisplayMax; i++)
         {
@@ -348,7 +348,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
             {
                 if (i == _hoverRow && _editingId == -1)
                 {
-                    using var hp = Rounded(new Rectangle(10, top + 1, Width - 20, RowH - 3), 6);
+                    using var hp = Rounded(new Rectangle(10, top + 4, Width - 20, RowH - 2), 6);
                     using var hb = new SolidBrush(RowHover);
                     g.FillPath(hb, hp);
                 }
@@ -658,8 +658,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     // ---- rename (double-click a row, or right-click → Rename) ----
     private int RowAt(Point p)
     {
-        if (p.X < 16 || p.X > Width - 16 || p.Y < JobsTop) return -1;
-        int i = (p.Y - JobsTop) / RowH;
+        if (p.X < 16 || p.X > Width - 16 || p.Y < JobsTop + 4) return -1;
+        int i = (p.Y - JobsTop - 4) / RowH; // a row runs from the line above it to the line below
         return i < _entries.Count ? i : -1;
     }
 

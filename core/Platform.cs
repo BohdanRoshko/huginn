@@ -118,6 +118,9 @@ internal interface IShell
     void Exit();
     /// <summary>Opens this Odin note in Odin (Windows: the Odin desktop window; elsewhere the web page).</summary>
     void OpenOdinNote(string slug);
+    /// <summary>Shows a recording in Huginn's meeting window, as a new tab when the window is open. Where there is no
+    /// such window yet (the Mac), the transcript file is shown instead.</summary>
+    void ShowMeeting(MeetingView view) => Reveal(view.TranscriptPath);
 }
 
 /// <summary>The floating dictation pill.</summary>

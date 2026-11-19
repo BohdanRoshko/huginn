@@ -37,6 +37,14 @@ internal static class OdinClient
             r.TryGetProperty("secondaryType", out var st) && st.ValueKind == JsonValueKind.String ? st.GetString() : null);
     }
 
+    /// <summary>A filed note's whole markdown file (frontmatter and body), for the meeting window.</summary>
+    public static async Task<string> NoteContentAsync(string slug, CancellationToken ct = default)
+    {
+        var body = await Http.GetStringAsync($"{Config.OdinBaseUrl}/api/notes/{Uri.EscapeDataString(slug)}/content", ct);
+        using var doc = JsonDocument.Parse(body);
+        return Str(doc.RootElement, "content");
+    }
+
     /// <summary>Stores one screen snapshot next to a filed meeting's transcript (<c>PUT /api/notes/{slug}/shots/{name}</c>).
     /// One request per image, so a long meeting never makes one huge body.</summary>
     public static async Task UploadShotAsync(string slug, string name, byte[] jpeg, CancellationToken ct = default)

@@ -36,8 +36,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     /// <summary>Raised when the user confirms the two-click discard (trash) while recording: stop AND
     /// delete the audio — no transcription, no filing.</summary>
     public event Action? DiscardRequested;
-    /// <summary>Raised with a row id when the user clicks "open in Odin" on a filed row.</summary>
-    public event Action<int>? OpenInOdinRequested;
+    /// <summary>Raised with a row id when the user clicks the open button on a finished row.</summary>
+    public event Action<int>? OpenRequested;
     /// <summary>Show the "open in Odin" button (only when settings.json names an Odin: Bohdan's machine).</summary>
     public bool ShowOdin { get; set; }
 
@@ -420,8 +420,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
         return parts;
     }
 
-    // A meeting Odin filed (it has the note's slug, or the title Odin gave it) can be opened there.
-    private bool CanOpenOdin(RecentMeeting e) => ShowOdin && !e.Cancelable && (e.OdinSlug != null || (e.Title != null && e.Tone == JobTone.Good));
+    // A finished meeting with a transcript opens in the meeting window (or, when chosen, in Odin).
+    private bool CanOpenOdin(RecentMeeting e) => !e.Cancelable && e.Transcript != null;
 
     private Rectangle OdinRect(int index) { var r = CancelRect(index); r.X -= 26; return r; }
 
@@ -585,7 +585,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
             }
             if (CanOpenOdin(_entries[i]) && OdinRect(i).Contains(e.Location))
             {
-                OpenInOdinRequested?.Invoke(_entries[i].Id);
+                OpenRequested?.Invoke(_entries[i].Id);
                 return;
             }
         }

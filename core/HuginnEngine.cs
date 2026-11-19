@@ -616,6 +616,50 @@ internal sealed class HuginnEngine : IAsyncDisposable
         MeetingNotes.Save(cur.NotesPath, cur.StartedLocal, _p.Notes.Snapshot());
     }
 
+    /// <summary>Where the open button opens a recording: Odin's drawer when chosen (and there is an Odin), else Huginn's
+    /// meeting window.</summary>
+    public bool OpenMeetingsInOdin => HasOdin && Settings.OpenMeetingsInOdin;
+
+    public void SetOpenMeetingsInOdin(bool odin)
+    {
+        Settings.OpenMeetingsInOdin = odin;
+        _shell.Refresh();
+    }
+
+    /// <summary>The open button on a finished row: Huginn's meeting window, a tab per recording; or, when chosen, the
+    /// note in Odin. A row Odin has not filed opens in the window either way.</summary>
+    public async Task OpenMeetingAsync(int id)
+    {
+        var row = Recent.Find(id);
+        if (row == null) return;
+        var slug = HasOdin ? await OdinSlugAsync(row) : null;
+        if (OpenMeetingsInOdin && slug != null)
+        {
+            HuginnLog.Write($"odin: opening note {slug}");
+            _shell.OpenOdinNote(slug);
+            return;
+        }
+        var view = await MeetingView.BuildAsync(row, slug, MeetingShotHost);
+        if (view == null) { SetStatus("The transcript is not on disk"); return; }
+        Ui(() => _shell.ShowMeeting(view));
+    }
+
+    /// <summary>The host name the meeting window loads snapshots from (mapped to the recordings folder).</summary>
+    public const string MeetingShotHost = "meetings.huginn";
+
+    private async Task<string?> OdinSlugAsync(RecentMeeting row)
+    {
+        if (row.OdinSlug != null) return row.OdinSlug;
+        if (string.IsNullOrWhiteSpace(row.Title)) return null;
+        try
+        {
+            var slug = await OdinClient.FindMeetingSlugAsync(row.Title!);
+            if (slug != null) Recent.SetOdinSlug(row.Id, slug);
+            return slug;
+        }
+        catch (Exception ex) { HuginnLog.Write("odin: note lookup failed", ex); return null; }
+    }
+
     /// <summary>The "open in Odin" button on a filed row: opens its note in Odin. A row filed before Huginn kept the
     /// slug finds it by its title first.</summary>
     public async Task OpenInOdinAsync(int id)

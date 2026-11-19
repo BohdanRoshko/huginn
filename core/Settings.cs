@@ -14,6 +14,10 @@ internal static class Settings
     /// <summary>Auto-file a finished meeting recording to Odin (POST /api/meetings/process). Default ON.</summary>
     public static bool SendMeetingsToOdin { get => Flag("send_meetings.txt", true); set => SetFlag("send_meetings.txt", value); }
 
+    /// <summary>Where a recording's open button opens it: Huginn's meeting window (the default), or Odin's note drawer
+    /// ("odin", only where there is an Odin). File open_meetings.txt.</summary>
+    public static bool OpenMeetingsInOdin { get => Read("open_meetings.txt") == "odin"; set => Write("open_meetings.txt", value ? "odin" : "window"); }
+
     /// <summary>Show the recorder panel. Default ON on Windows; OFF on the Mac, which is a menu bar app first.</summary>
     public static bool MeetingPanelVisible { get => Flag("panel.txt", !OperatingSystem.IsMacOS()); set => SetFlag("panel.txt", value); }
 

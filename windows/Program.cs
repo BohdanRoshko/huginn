@@ -19,6 +19,25 @@ internal static class Program
             return;
         }
 
+        // `Huginn.exe --preview-meeting <stamp> [<stamp> …]`: only the meeting window with those recordings as tabs,
+        // for checking its look; the running Huginn is untouched.
+        int at = Array.IndexOf(args, "--preview-meeting");
+        if (at >= 0)
+        {
+            ApplicationConfiguration.Initialize();
+            var recent = new RecentMeetings();
+            var window = new MeetingWindow(Screen.PrimaryScreen!.WorkingArea);
+            window.FormClosed += (_, _) => Application.Exit();
+            foreach (var stamp in args.Skip(at + 1))
+            {
+                var row = recent.Entries.FirstOrDefault(e => e.Stamp == stamp);
+                var view = row == null ? null : MeetingView.BuildAsync(row, row.OdinSlug, HuginnEngine.MeetingShotHost).GetAwaiter().GetResult();
+                if (view != null) window.ShowMeeting(view);
+            }
+            Application.Run(window);
+            return;
+        }
+
         // One instance only — a second keyboard hook would double every keystroke.
         using var mutex = new Mutex(true, "Huginn_SingleInstance", out bool isNew);
         if (!isNew)

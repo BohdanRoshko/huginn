@@ -31,6 +31,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
     private ToolStripMenuItem _kumoStatusItem = null!;
     private ToolStripMenuItem _presenceItem = null!;
     private ToolStripMenuItem _recordingsItem = null!;
+    private ToolStripMenuItem _openWindowItem = null!, _openOdinItem = null!;
     private ToolStripMenuItem _panelItem = null!;
     private ToolStripMenuItem _notesOffItem = null!, _notesAlwaysItem = null!, _notesRecordItem = null!;
     private ToolStripMenuItem _callAskItem = null!, _callAutoItem = null!, _callOffItem = null!;
@@ -87,7 +88,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _panel.CancelRequested += _engine.CancelJob;
         _panel.DiscardRequested += _engine.Discard;
         _panel.ShowOdin = _engine.HasOdin;
-        _panel.OpenInOdinRequested += id => _ = _engine.OpenInOdinAsync(id);
+        _panel.OpenRequested += id => _ = _engine.OpenMeetingAsync(id);
         // The notepad: the recorder's controls, beside it. NotesMode says when it shows: "always" (paired with the
         // recorder's show/hide), "record" (opens when a recording starts), or "off".
         _notes.RecordToggleRequested += _engine.ToggleMeeting;
@@ -154,6 +155,8 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _kumoStatusItem.Enabled = _engine.KumoRestartAvailable;
         _presenceItem.Text = _engine.PresenceTodayText;
         _recordingsItem.Text = _engine.RecordingsSizeText;
+        _openWindowItem.Checked = !_engine.OpenMeetingsInOdin;
+        _openOdinItem.Checked = _engine.OpenMeetingsInOdin;
         _notesOffItem.Checked = _engine.NotesMode == "off";
         _notesAlwaysItem.Checked = _engine.NotesMode == "always";
         _notesRecordItem.Checked = _engine.NotesMode == "record";
@@ -163,6 +166,19 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
     });
 
     public void Exit() => RunOnUi(ExitApp);
+
+    // Huginn's meeting window: one window, a tab per meeting; made again after it was closed.
+    private MeetingWindow? _meetingWindow;
+
+    public void ShowMeeting(MeetingView view) => RunOnUi(() =>
+    {
+        if (_meetingWindow == null || _meetingWindow.IsDisposed)
+        {
+            _meetingWindow = new MeetingWindow(_panel.Visible ? _panel.Bounds : Screen.PrimaryScreen!.WorkingArea);
+            _meetingWindow.FormClosed += (_, _) => _meetingWindow = null;
+        }
+        _meetingWindow.ShowMeeting(view);
+    });
 
     // The Odin desktop window, started (or, when it is already open, poked) with --open-note; the web page when the
     // window's shortcut cannot be found.
@@ -217,6 +233,12 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         menu.Items.Add(_discardItem);
         _sendMeetingsItem = new ToolStripMenuItem("Auto-file meetings to Odin", null, (_, _) => _engine.SetSendMeetings(!_engine.SendMeetings));
         if (_engine.HasOdin) menu.Items.Add(_sendMeetingsItem); // only Bohdan has Odin
+        // Where a recording's open button goes: Huginn's meeting window, or Odin's note drawer (only with an Odin).
+        var openMenu = new ToolStripMenuItem("Open meetings in");
+        _openWindowItem = new ToolStripMenuItem("Huginn window", null, (_, _) => _engine.SetOpenMeetingsInOdin(false));
+        _openOdinItem = new ToolStripMenuItem("Odin", null, (_, _) => _engine.SetOpenMeetingsInOdin(true));
+        openMenu.DropDownItems.AddRange(new ToolStripItem[] { _openWindowItem, _openOdinItem });
+        if (_engine.HasOdin) menu.Items.Add(openMenu);
         // Meeting detection, for every source (Kumospace, Meet, Teams, Slack huddles, Zoom): a Notion-style pop-up,
         // auto-record, or nothing.
         var callsMenu = new ToolStripMenuItem("Meeting detection");

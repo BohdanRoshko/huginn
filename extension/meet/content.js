@@ -10,11 +10,12 @@
   const queue = [];
   let inCall = false;
   let selfName = "";
-  let chatWatch = null;
+  let chatWatch = null, chatNode = null, chatOpens = 0;
+  const chatSeen = new Set(); // data-message-id of every message already passed on
   const hands = new Map(); // name -> raised
   const recent = new Map(); // dedupe key -> time
 
-  const log = (...a) => console.debug("[huginn]", ...a);
+  const log = (...a) => console.log("[huginn]", ...a);
   const meeting = () => (location.pathname.match(/^\/([a-z]+-[a-z]+-[a-z]+)/) || [])[1] || location.pathname.slice(1);
   const icons = (name) => [...document.querySelectorAll(ICONS)].filter((e) => e.textContent.trim() === name);
   const me = (name) => (!name || /^you$/i.test(name.trim()) ? selfName || "Me" : name.trim());
@@ -49,17 +50,19 @@
     if (now !== inCall) {
       inCall = now;
       log(inCall ? "joined" : "left", meeting());
-      if (inCall) startChat(); else { hands.clear(); stopChat(); }
+      if (!inCall) { hands.clear(); stopChat(); chatOpens = 0; }
     }
     if (inCall) {
       selfName = selfName || document.querySelector(SELF_NAME)?.textContent?.trim() || accountName();
       scanHands();
+      watchChat();
     }
     for (const [k, t] of recent) if (Date.now() - t > 60000) recent.delete(k);
     flush();
   }, 1000);
 
-  // ---- raised hands: a "back_hand" icon on a person's tile, plus Meet's spoken announcements ----
+  // ---- raised hands: mine from the hand button ("Lower hand" while it is up), others' from the "front_hand" icon on
+  //      their tile (both seen in a call, 2026-11-20), plus Meet's spoken announcements ----
   function setHand(name, up) {
     name = me(name);
     if (!name || (hands.get(name) || false) === up) return;
@@ -67,25 +70,33 @@
     push(up ? "hand-up" : "hand-down", name, "");
   }
 
+  // A tile's person: its first "notranslate" text that is not an icon (icons are notranslate too).
   function tileName(tile) {
-    const label = tile.querySelector(".notranslate, [data-self-name]");
-    const text = label?.getAttribute("data-self-name") || label?.textContent || "";
-    return text.trim().split("\n")[0];
+    const own = tile.querySelector("[data-self-name]")?.getAttribute("data-self-name");
+    if (own) return own.trim();
+    for (const el of tile.querySelectorAll(".notranslate")) {
+      if (el.matches(`i, ${ICONS}, [class*="material"]`) || el.querySelector(ICONS)) continue;
+      const text = (el.textContent || "").trim().split("\n")[0];
+      if (text && text.length <= 60 && !/^[a-z_]+$/.test(text)) return text;
+    }
+    return "";
   }
 
   function scanHands() {
+    const mine = document.querySelector('[aria-label^="Lower hand"]') ? true
+      : document.querySelector('[aria-label^="Raise hand"]') ? false : null;
+    if (mine !== null) setHand(selfName || "Me", mine);
     const up = new Set();
+    const seen = new Set();
     for (const tile of document.querySelectorAll("[data-participant-id]")) {
-      const raised = [...tile.querySelectorAll(ICONS)].some((e) => e.textContent.trim() === "back_hand");
-      const name = tileName(tile);
-      if (name && raised) up.add(me(name));
+      const name = me(tileName(tile));
+      if (!name || name === me("")) continue; // my own tile: the button above says it better
+      seen.add(name);
+      if ([...tile.querySelectorAll(ICONS)].some((e) => e.textContent.trim() === "front_hand")) up.add(name);
     }
     for (const name of up) setHand(name, true);
     // Only tiles on screen are known, so a hand goes down when its tile shows no hand, not when the tile is gone.
-    for (const tile of document.querySelectorAll("[data-participant-id]")) {
-      const name = me(tileName(tile));
-      if (name && hands.get(name) && !up.has(name)) setHand(name, false);
-    }
+    for (const name of seen) if (hands.get(name) && !up.has(name)) setHand(name, false);
   }
 
   function onAnnouncement(text) {
@@ -116,48 +127,53 @@
     if (who) push("react", who, emoji, 4000);
   }
 
-  // ---- chat: the message list, opened once so Meet puts it in the page (it stays after the panel closes) ----
-  function startChat() {
-    if (chatWatch) return;
-    let tries = 0;
-    const timer = setInterval(() => {
-      if (!inCall || ++tries > 30) { clearInterval(timer); return; }
-      let region = document.querySelector(CHAT_REGION);
-      if (!region) {
-        const button = icons("chat")[0]?.closest("button");
-        if (!button || tries % 5 !== 1) return;
-        button.click(); // open the chat panel…
-        setTimeout(() => { if (document.querySelector(CHAT_REGION)) button.click(); }, 400); // …and close it again
-        return;
-      }
-      clearInterval(timer);
-      lastChat = readLast(region);
-      chatWatch = new MutationObserver(() => readChat(region));
+  // ---- chat: the message list. Meet adds it to the page the first time the chat panel opens and keeps it after the
+  //      panel closes, so the panel is opened (and closed again) once, unless the user already opened it ----
+  function watchChat() {
+    const region = document.querySelector(CHAT_REGION);
+    if (!region) {
+      if (chatOpens >= 3) return;
+      const button = [...document.querySelectorAll("button")].find((b) => /^chat with everyone|^chat\b/i.test(b.getAttribute("aria-label") || ""))
+        || (icons("chat")[0] || icons("chat_bubble")[0])?.closest("button");
+      if (!button) return;
+      chatOpens++;
+      button.click(); // open the chat panel…
+      setTimeout(() => { if (document.querySelector(CHAT_REGION)) button.click(); }, 500); // …and close it again
+      return;
+    }
+    if (region !== chatNode) {
+      chatWatch?.disconnect();
+      chatNode = region;
+      chatWatch = new MutationObserver(readChat);
       chatWatch.observe(region, { childList: true, subtree: true, characterData: true });
       log("chat: watching");
-    }, 1000);
+    }
+    readChat();
   }
 
-  function stopChat() { chatWatch?.disconnect(); chatWatch = null; }
+  function stopChat() { chatWatch?.disconnect(); chatWatch = null; chatNode = null; }
 
-  // The newest message: its header holds the name and the time (only the time for my own messages). The path is the
-  // one the open-source TranscripTonic extension keeps current for Meet.
-  let lastChat = "";
-  function readLast(region) {
-    const msg = region.lastChild?.firstChild?.firstChild?.lastChild;
-    const head = msg?.firstChild;
-    const who = head?.childNodes.length === 1 ? selfName || "Me" : head?.firstChild?.textContent || "";
-    const text = msg?.lastChild?.lastChild?.firstChild?.firstChild?.firstChild?.textContent || "";
-    return who && text ? `${who}\u0000${text}` : "";
+  // Each message has its own data-message-id, so it is passed on once. Its text is in jsname="dTKtvb". The group
+  // header above holds the sender's name and the time; my own messages have only the time (seen 2026-11-20).
+  function readChat() {
+    const region = chatNode;
+    if (!region) return;
+    for (const m of region.querySelectorAll("div[data-message-id]")) {
+      const id = m.getAttribute("data-message-id");
+      if (chatSeen.has(id)) continue;
+      const text = (m.querySelector('[jsname="dTKtvb"]')?.textContent || "").trim();
+      if (!text) continue; // still being drawn; the next change reads it
+      chatSeen.add(id);
+      push("chat", chatSender(m), text);
+    }
   }
 
-  // Meet fires many changes per message; a message counts once, when the newest one changes.
-  function readChat(region) {
-    const last = readLast(region);
-    if (!last || last === lastChat) return;
-    lastChat = last;
-    const [who, text] = last.split("\u0000");
-    push("chat", who, text.trim());
+  function chatSender(m) {
+    const head = m.parentElement?.previousElementSibling;
+    if (!head) return selfName || "Me";
+    const time = head.querySelector('[jsname="biJjHb"]')?.textContent || "";
+    const name = (head.textContent || "").replace(time, "").trim();
+    return name || selfName || "Me";
   }
 
   // ---- one observer for the whole page: announcements and floating reactions ----

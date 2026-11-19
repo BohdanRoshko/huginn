@@ -22,6 +22,10 @@ namespace Huginn;
 /// (<see cref="CancelRequested"/>). Double-click a row (or right-click it → Rename) to name the meeting; the
 /// transcript file takes that name (<see cref="MeetingProcessor.RenameTranscript"/>) and Odin's title no longer
 /// overwrites it. Drag to move; right-click outside the rows to hide.
+///
+/// It is an ordinary window, not always on top (Bohdan, 2026-11-20): other windows can cover it, and the tray icon
+/// brings it back. Depth comes from layers, not lines: Windows rounds it and gives it a shadow, the level meter
+/// sits in a darker well, and the recordings sit on a slightly raised surface whose rows light up under the mouse.
 /// </summary>
 internal sealed class MeetingPanel : Form, IRecorderView
 {
@@ -48,6 +52,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private int _hoverCancelId = -1;
     private int _hoverCopyId = -1;
     private int _hoverOdinId = -1;
+    private int _hoverRow = -1;             // the row under the mouse: it lights up
     private int _copiedId = -1;             // the row whose path was just copied: its icon shows a check briefly
     private DateTime _copiedAt;
     private TextBox? _editor;              // inline rename box over a row's name line
@@ -70,9 +75,13 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private readonly Font _rowNameFont = new("Segoe UI Semibold", 9f);
     private readonly Font _rowMetaFont = new("Segoe UI", 8f);
 
-    private static readonly Color Bg = Color.FromArgb(30, 30, 32);
+    // Surfaces, darkest to lightest: the meter well, the panel, the list surface, a hovered row.
+    private static readonly Color Well = Color.FromArgb(24, 24, 25);
+    private static readonly Color Bg = Color.FromArgb(32, 32, 33);           // #202021, the pop-up's surface
+    private static readonly Color Raised = Color.FromArgb(38, 38, 39);
+    private static readonly Color RowHover = Color.FromArgb(46, 46, 47);
     private static readonly Color Border = Color.FromArgb(20, 255, 255, 255);
-    private static readonly Color Divider = Color.FromArgb(16, 255, 255, 255);
+    private static readonly Color WellEdge = Color.FromArgb(10, 255, 255, 255);
     private static readonly Color TitleCol = Color.FromArgb(234, 234, 236);
     private static readonly Color RowName = Color.FromArgb(214, 214, 218);
     private static readonly Color Muted = Color.FromArgb(140, 140, 144);
@@ -81,7 +90,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private static readonly Color RedHover = Color.FromArgb(236, 92, 96);
     private static readonly Color Amber = Color.FromArgb(226, 170, 92);
     private static readonly Color Green = Color.FromArgb(122, 196, 143);
-    private static readonly Color Skeleton = Color.FromArgb(34, 255, 255, 255); // muted placeholder bar on the dark bg
+    private static readonly Color Skeleton = Color.FromArgb(22, 255, 255, 255); // muted placeholder bar on the list surface
 
     private const int BaseH = 112;
     private const int MeterCy = 61;   // mic-level meter center: the band between the header and the list
@@ -98,7 +107,6 @@ internal sealed class MeetingPanel : Form, IRecorderView
         _recent.Changed += () => Ui(() => { _entries = _recent.Entries.ToList(); RecalcHeight(); Invalidate(); });
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
-        TopMost = true;
         StartPosition = FormStartPosition.Manual;
         DoubleBuffered = true;
         BackColor = Bg;
@@ -126,7 +134,41 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private Rectangle TrashRect => new(Width - 14 - 80 - 8 - 28, 11, 28, 28);
 
     // ---- public API ----
-    public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; BringToFront(); });
+    public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } Raise(); });
+
+    /// <summary>Puts the panel above other windows once, without taking the keyboard (the tray icon, a show).</summary>
+    public void Raise() => Ui(() =>
+    {
+        if (!Visible) return;
+        SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); // HWND_TOP; NOSIZE | NOMOVE | NOACTIVATE
+    });
+
+    // Windows 11 rounds the window and draws its shadow, so the corners are smooth; elsewhere a region cuts them.
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ClassStyle |= 0x00020000; // CS_DROPSHADOW
+            return cp;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        int round = 2, border = 0x00303032; // DWMWCP_ROUND; a quiet edge, COLORREF 0x00BBGGRR
+        _dwmRounded = DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)) == 0;
+        if (_dwmRounded) DwmSetWindowAttribute(Handle, 34, ref border, sizeof(int));
+        ApplyRegion();
+    }
+
+    private bool _dwmRounded;
+
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
     public void HidePanel() => Ui(() => { CancelRename(); SavePosition(); if (Visible) Hide(); });
 
     public void SetIdle() => Ui(() => { _recording = false; _discardArmed = false; Invalidate(); });
@@ -158,8 +200,20 @@ internal sealed class MeetingPanel : Form, IRecorderView
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
         g.Clear(Bg);
 
-        using (var bp = Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 14))
-        using (var pen = new Pen(Border)) g.DrawPath(pen, bp);
+        if (!_dwmRounded)
+        {
+            using var bp = Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 14);
+            using var pen = new Pen(Border);
+            g.DrawPath(pen, bp);
+        }
+
+        // The meter's well: a darker inset band, so the level reads as a live instrument, not loose bars.
+        var well = new Rectangle(14, MeterCy - 16, Width - 28, 32);
+        using (var wp = Rounded(well, 9))
+        {
+            using (var wb = new SolidBrush(Well)) g.FillPath(wb, wp);
+            using (var we = new Pen(WellEdge)) g.DrawPath(we, wp);
+        }
 
         DrawHeader(g);
         // The band between the header and the list is the meter. While the trash is armed it shows the confirm
@@ -168,17 +222,32 @@ internal sealed class MeetingPanel : Form, IRecorderView
             TextRenderer.DrawText(g, "Click the trash again to DELETE this recording.", _footFont,
                 new Rectangle(16, MeterCy - 7, Width - 32, 14), Red, TextFormatFlags.NoPrefix | TextFormatFlags.Left);
         else
-            DrawMeter(g, 16, Width - 16, MeterCy);
+            DrawMeter(g, 22, Width - 22, MeterCy);
 
         DrawEntries(g);
     }
 
     private void DrawHeader(Graphics g)
     {
-        using (var tile = new SolidBrush(Color.FromArgb(44, 44, 47)))
+        // Huginn's tile, the same one the meeting pop-up shows: white, with the waveform in ink.
+        using (var tile = new SolidBrush(Color.FromArgb(236, 236, 236)))
         using (var tp = Rounded(IconTile, 6)) g.FillPath(tile, tp);
-        using (var dot = new SolidBrush(_recording ? Red : Color.FromArgb(150, 150, 154)))
-            g.FillEllipse(dot, IconTile.X + 7, IconTile.Y + 7, 8, 8);
+        float[] bars = { 5, 10, 15, 9, 12, 6 };
+        using (var ink = new SolidBrush(Color.FromArgb(28, 28, 28)))
+            for (int i = 0; i < bars.Length; i++)
+            {
+                float bx = IconTile.X + 4.2f + i * 2.55f, bh = bars[i];
+                using var bar = Rounded(new RectangleF(bx, IconTile.Y + (IconTile.Height - bh) / 2f, 1.6f, bh), 0.8f);
+                g.FillPath(ink, bar);
+            }
+        if (_recording)
+        {
+            // A red badge on the tile's corner, ringed in the panel colour so it sits on top.
+            using var ring = new SolidBrush(Bg);
+            using var dot = new SolidBrush(Red);
+            g.FillEllipse(ring, IconTile.Right - 7, IconTile.Y - 3, 11, 11);
+            g.FillEllipse(dot, IconTile.Right - 5, IconTile.Y - 1, 7, 7);
+        }
 
         TextRenderer.DrawText(g, "Meeting", _titleFont, new Point(46, 14), TitleCol, TextFormatFlags.NoPrefix);
         if (_recording)
@@ -198,13 +267,13 @@ internal sealed class MeetingPanel : Form, IRecorderView
         if (armed)
         {
             using var fb = new SolidBrush(hover ? RedHover : Red);
-            using var fp = Rounded(rect, 8);
+            using var fp = Rounded(rect, rect.Height / 2);
             g.FillPath(fb, fp);
         }
         else if (hover)
         {
             using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
-            using var hp = Rounded(rect, 8);
+            using var hp = Rounded(rect, rect.Height / 2);
             g.FillPath(hb, hp);
         }
         var col = armed ? Color.White : (hover ? RedHover : Muted);
@@ -222,8 +291,16 @@ internal sealed class MeetingPanel : Form, IRecorderView
     // red pill with a manually-centered record dot / stop square + label
     private void DrawActionPill(Graphics g, Rectangle rect, bool isStop)
     {
-        using (var b = new SolidBrush(_btnHover ? RedHover : Red))
-        using (var pp = Rounded(rect, 8)) g.FillPath(b, pp);
+        using (var pp = Rounded(rect, rect.Height / 2))
+        {
+            using (var b = new SolidBrush(_btnHover ? RedHover : Red)) g.FillPath(b, pp);
+            // a hairline of light along the top, so the pill reads as raised
+            var clip = g.Clip;
+            g.SetClip(pp);
+            using (var hl = new Pen(Color.FromArgb(56, 255, 255, 255), 1f))
+                g.DrawLine(hl, rect.X + rect.Height / 2f, rect.Y + 0.5f, rect.Right - rect.Height / 2f, rect.Y + 0.5f);
+            g.Clip = clip;
+        }
 
         string text = isStop ? "Stop" : "Record";
         const int glyph = 9, gap = 7;
@@ -249,8 +326,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
         {
             float lvl = _wave[_wave.Length - n + i];
             float h = Math.Max(2f, lvl * maxH);
-            int a = 30 + (int)(170 * Math.Min(1f, lvl));
-            using var br = new SolidBrush(Color.FromArgb(a, 232, 232, 236));
+            int a = 26 + (int)(190 * Math.Min(1f, lvl));
+            using var br = new SolidBrush(_recording ? Color.FromArgb(a, 255, 196, 196) : Color.FromArgb(a, 232, 232, 236));
             using var bar = Rounded(new RectangleF(x0 + i * step, cy - h / 2f, barW, h), 1.5f);
             g.FillPath(br, bar);
         }
@@ -260,18 +337,34 @@ internal sealed class MeetingPanel : Form, IRecorderView
     {
         // Fixed-size panel: always the divider + DisplayMax row slots. A slot with a recording renders it;
         // an empty slot renders a skeleton placeholder so the window is a constant height regardless of count.
-        using (var dp = new Pen(Divider)) g.DrawLine(dp, 16, JobsDividerY, Width - 16, JobsDividerY);
+        // The recordings sit on a surface one step lighter than the panel, inset 8 px and rounded like the window, so
+        // the list reads as its own layer without a divider line.
+        var surface = new Rectangle(8, JobsDividerY, Width - 16, Height - JobsDividerY - 8);
+        using (var sp = Rounded(surface, 8))
+        using (var sb = new SolidBrush(Raised)) g.FillPath(sb, sp);
 
         for (int i = 0; i < DisplayMax; i++)
         {
             int top = JobsTop + i * RowH;
-            if (i < _entries.Count) DrawEntryRow(g, _entries[i], i, top);
+            if (i < _entries.Count)
+            {
+                if (i == _hoverRow && _editingId == -1)
+                {
+                    using var hp = Rounded(new Rectangle(12, top, Width - 24, RowH - 2), 6);
+                    using var hb = new SolidBrush(RowHover);
+                    g.FillPath(hb, hp);
+                }
+                DrawEntryRow(g, _entries[i], i, top);
+            }
             else DrawSkeletonRow(g, i, top);
         }
     }
 
     private void DrawEntryRow(Graphics g, RecentMeeting entry, int i, int top)
     {
+        if (entry.Cancelable)
+            using (var halo = new SolidBrush(Color.FromArgb(56, ToneColor(entry.Tone))))
+                g.FillEllipse(halo, 16, top + 12, 13, 13);
         using (var d = new SolidBrush(ToneColor(entry.Tone)))
             g.FillEllipse(d, 19, top + 15, 7, 7);
 
@@ -342,7 +435,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         }
         using var pen = new Pen(hover ? TitleCol : Muted, 1.3f);
         using (var back = Rounded(new RectangleF(cx - 2.5f, cy - 5.5f, 8, 8), 1.8f)) g.DrawPath(pen, back);
-        using (var fill = new SolidBrush(Bg))
+        using (var fill = new SolidBrush(_hoverRow >= 0 && _hoverRow < _entries.Count && CancelRect(_hoverRow).Contains(hit.Location) ? RowHover : Raised))
         using (var front = Rounded(new RectangleF(cx - 5.5f, cy - 2.5f, 8, 8), 1.8f))
         {
             g.FillPath(fill, front); // hides the back square's corner behind the front one
@@ -418,6 +511,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
     private void ApplyRegion()
     {
+        if (_dwmRounded) { Region = null; return; }
         using var p = Rounded(new Rectangle(0, 0, Width, Height), 14);
         Region = new Region(p);
     }
@@ -483,6 +577,9 @@ internal sealed class MeetingPanel : Form, IRecorderView
         bool th = _recording && TrashRect.Contains(e.Location);
         if (th != _discardHover) { _discardHover = th; Invalidate(); }
 
+        int row = RowAt(e.Location);
+        if (row != _hoverRow) { _hoverRow = row; Invalidate(); }
+
         int hover = -1;
         for (int i = 0; i < _entries.Count; i++)
             if (_entries[i].Cancelable && CancelRect(i).Contains(e.Location)) { hover = _entries[i].Id; break; }
@@ -522,7 +619,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     {
         base.OnMouseLeave(e);
         if (_dragging) return;
-        bool changed = _btnHover || _discardHover || _hoverCancelId != -1 || _hoverCopyId != -1 || _hoverOdinId != -1;
+        bool changed = _btnHover || _discardHover || _hoverCancelId != -1 || _hoverCopyId != -1 || _hoverOdinId != -1 || _hoverRow != -1;
+        _hoverRow = -1;
         _hoverOdinId = -1;
         _btnHover = false;
         _discardHover = false;
@@ -588,7 +686,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         _editor = new TextBox
         {
             BorderStyle = BorderStyle.None,
-            BackColor = Color.FromArgb(44, 44, 47),
+            BackColor = RowHover,
             ForeColor = TitleCol,
             Font = _rowNameFont,
             Text = entry.Title ?? "",

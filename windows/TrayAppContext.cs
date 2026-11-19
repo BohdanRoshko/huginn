@@ -59,6 +59,14 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _notes = new NotesPanel();
 
         _tray = new NotifyIcon { Icon = _iconOff, Visible = true, Text = "Huginn" };
+        // The panels are not always on top, so a left click on the tray icon brings them back up (or shows them).
+        _tray.MouseClick += (_, e) =>
+        {
+            if (e.Button != MouseButtons.Left) return;
+            if (!_panelVisible) { TogglePanel(); return; }
+            _panel.Raise();
+            _notes.Raise();
+        };
 
         _engine = new HuginnEngine(new Platform(
             Shell: this,

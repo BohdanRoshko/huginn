@@ -86,7 +86,6 @@ internal sealed class NotesPanel : Form, INotesView
     {
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
-        TopMost = true;
         StartPosition = FormStartPosition.Manual;
         DoubleBuffered = true;
         BackColor = Bg;
@@ -132,7 +131,17 @@ internal sealed class NotesPanel : Form, INotesView
     private void LayoutPad() => _pad.SetBounds(16, PadTop, W - 32, PadBottom - PadTop);
 
     // ---- public API ----
-    public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } TopMost = true; });
+    public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } Raise(); });
+
+    /// <summary>Puts the pad above other windows once, without taking the keyboard; like the recorder, it is not
+    /// always on top (Bohdan, 2026-11-20).</summary>
+    public void Raise() => Ui(() =>
+    {
+        if (Visible) SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010); // HWND_TOP; NOSIZE | NOMOVE | NOACTIVATE
+    });
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
     public void HidePanel() => Ui(() => { SavePosition(); if (Visible) Hide(); });
 
     /// <summary>Bring the pad to the keyboard (only when the user is already interacting with Huginn).</summary>

@@ -170,7 +170,7 @@ internal sealed class MacCallPrompt : ICallPrompt
         _timeout?.Invalidate();
         _timeout = NSTimer.CreateScheduledTimer(ShowSeconds, _ => OptionChosen?.Invoke("not now"));
         _tick?.Invalidate();
-        _tick = NSTimer.CreateRepeatingScheduledTimer(TimeSpan.FromMilliseconds(100), _ => _view.NeedsDisplay = true); // the countdown bar
+        _tick = NSTimer.CreateRepeatingScheduledTimer(TimeSpan.FromSeconds(1.0 / 60), _ => _view.NeedsDisplay = true); // the countdown bar, once per frame
     });
 
     public void HidePrompt() => MacUi.OnMain(() =>

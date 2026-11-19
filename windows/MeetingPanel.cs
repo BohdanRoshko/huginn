@@ -385,7 +385,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         if (entry.Title != null)
         {
             int x = 34 + TextRenderer.MeasureText(g, time, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width + 8;
-            foreach (var chip in StatusChips(entry.Status))
+            foreach (var chip in StatusChips(entry.Status, ShowOdin))
             {
                 int w = TextRenderer.MeasureText(g, chip, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width + 12;
                 if (x + w > 34 + nameW) break;
@@ -403,16 +403,21 @@ internal sealed class MeetingPanel : Form, IRecorderView
         if (odin) DrawOpenOdin(g, OdinRect(i), entry.Id == _hoverOdinId);
     }
 
-    // "✓ internal-dev · 1 task(s)" → [internal-dev] [1 task]; "Saved · Odin offline" → [Saved] [Odin offline].
-    internal static IEnumerable<string> StatusChips(string status)
+    // "✓ internal-dev · 1 task(s)" → [1 task] [internal-dev]: the task count first (Bohdan, 2026-11-20), and only when
+    // there is an Odin to make tasks; "Saved · Odin offline" → [Saved] [Odin offline].
+    internal static IEnumerable<string> StatusChips(string status, bool withTasks)
     {
+        var parts = new List<string>();
+        string? taskChip = null;
         foreach (var raw in status.Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var part = raw.TrimStart('✓', ' ');
             var tasks = System.Text.RegularExpressions.Regex.Match(part, @"^(\d+) task\(s\)$");
-            if (tasks.Success) part = tasks.Groups[1].Value == "1" ? "1 task" : $"{tasks.Groups[1].Value} tasks";
-            if (part.Length > 0) yield return part;
+            if (tasks.Success) { taskChip = tasks.Groups[1].Value == "1" ? "1 task" : $"{tasks.Groups[1].Value} tasks"; continue; }
+            if (part.Length > 0) parts.Add(part);
         }
+        if (taskChip != null && withTasks) parts.Insert(0, taskChip);
+        return parts;
     }
 
     // A meeting Odin filed (it has the note's slug, or the title Odin gave it) can be opened there.

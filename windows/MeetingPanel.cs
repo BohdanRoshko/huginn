@@ -100,7 +100,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private const int MeterMaxH = 22; // bar height at full level: room above and below inside the 32 px well
     private const int JobsDividerY = 80;
     private const int JobsTop = 80;    // row content starts 4 px higher than the lines: half the top padding moved to the bottom
-    private const int RowH = 38;       // original recent-row height (the header, not the rows, was trimmed)
+    private const int RowH = 35;       // 3 px between a row's text and the line above it, and 3 px to the line below (Bohdan, 2026-11-20)
     private const int BottomPad = 12;
 
     public MeetingPanel(RecentMeetings recent)
@@ -399,8 +399,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
         }
 
         if (cancelable) DrawCancel(g, CancelRect(i), entry.Id == _hoverCancelId);
-        else if (copyable) DrawCopy(g, CancelRect(i), entry.Id == _hoverCopyId, entry.Id == _copiedId);
-        if (odin) DrawOpenOdin(g, OdinRect(i), entry.Id == _hoverOdinId);
+        else if (copyable) DrawCopy(g, CopyRect(i), entry.Id == _hoverCopyId, entry.Id == _copiedId);
+        if (odin) DrawOpenOdin(g, OpenRect(i), entry.Id == _hoverOdinId);
     }
 
     // "✓ internal-dev · 1 task(s)" → [1 task] [internal-dev]: the task count first (Bohdan, 2026-11-20), and only when
@@ -423,7 +423,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     // A finished meeting with a transcript opens in the meeting window (or, when chosen, in Odin).
     private bool CanOpenOdin(RecentMeeting e) => !e.Cancelable && e.Transcript != null;
 
-    private Rectangle OdinRect(int index) { var r = CancelRect(index); r.X -= 26; return r; }
+    private Rectangle OpenRect(int index) => CancelRect(index); // open sits at the right edge, copy left of it (Bohdan, 2026-11-20)
+    private Rectangle CopyRect(int index) { var r = CancelRect(index); r.X -= 26; return r; }
 
     // "Open in Odin": a rounded square with an arrow leaving its top-right corner.
     private void DrawOpenOdin(Graphics g, Rectangle hit, bool hover)
@@ -465,7 +466,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         }
         using var pen = new Pen(hover ? TitleCol : Muted, 1.3f);
         using (var back = Rounded(new RectangleF(cx - 2.5f, cy - 5.5f, 8, 8), 1.8f)) g.DrawPath(pen, back);
-        using (var fill = new SolidBrush(_hoverRow >= 0 && _hoverRow < _entries.Count && CancelRect(_hoverRow).Contains(hit.Location) ? RowHover : Bg))
+        using (var fill = new SolidBrush(_hoverRow >= 0 && _hoverRow < _entries.Count && CopyRect(_hoverRow).Contains(hit.Location) ? RowHover : Bg))
         using (var front = Rounded(new RectangleF(cx - 5.5f, cy - 2.5f, 8, 8), 1.8f))
         {
             g.FillPath(fill, front); // hides the back square's corner behind the front one
@@ -519,7 +520,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private Rectangle CancelRect(int index)
     {
         int top = JobsTop + index * RowH;
-        return new Rectangle(Width - 36, top + 8, 22, 22);
+        // Centred between the lines above and below the row (they sit at top + 3 and top + RowH + 3).
+        return new Rectangle(Width - 36, top + 3 + RowH / 2 - 11, 22, 22);
     }
 
     private static Color ToneColor(JobTone t) => t switch
@@ -578,12 +580,12 @@ internal sealed class MeetingPanel : Form, IRecorderView
                 CancelRequested?.Invoke(_entries[i].Id);
                 return;
             }
-            if (CanCopy(_entries[i]) && CancelRect(i).Contains(e.Location))
+            if (CanCopy(_entries[i]) && CopyRect(i).Contains(e.Location))
             {
                 CopyPath(_entries[i]);
                 return;
             }
-            if (CanOpenOdin(_entries[i]) && OdinRect(i).Contains(e.Location))
+            if (CanOpenOdin(_entries[i]) && OpenRect(i).Contains(e.Location))
             {
                 OpenRequested?.Invoke(_entries[i].Id);
                 return;
@@ -617,10 +619,10 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
         int copyHover = -1;
         for (int i = 0; i < _entries.Count; i++)
-            if (CanCopy(_entries[i]) && CancelRect(i).Contains(e.Location)) { copyHover = _entries[i].Id; break; }
+            if (CanCopy(_entries[i]) && CopyRect(i).Contains(e.Location)) { copyHover = _entries[i].Id; break; }
         int odinHover = -1;
         for (int i = 0; i < _entries.Count; i++)
-            if (CanOpenOdin(_entries[i]) && OdinRect(i).Contains(e.Location)) { odinHover = _entries[i].Id; break; }
+            if (CanOpenOdin(_entries[i]) && OpenRect(i).Contains(e.Location)) { odinHover = _entries[i].Id; break; }
         if (copyHover != _hoverCopyId || odinHover != _hoverOdinId)
         {
             _hoverCopyId = copyHover;
@@ -640,7 +642,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         base.OnMouseDoubleClick(e);
         if (e.Button != MouseButtons.Left) return;
         int row = RowAt(e.Location);
-        if (row < 0 || CancelRect(row).Contains(e.Location) || OdinRect(row).Contains(e.Location)) return;
+        if (row < 0 || CancelRect(row).Contains(e.Location) || CopyRect(row).Contains(e.Location)) return;
         _dragging = false; // the second mouse-down armed a drag; this is a rename, not a move
         BeginRename(_entries[row], row);
     }

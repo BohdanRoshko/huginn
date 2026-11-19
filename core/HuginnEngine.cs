@@ -21,6 +21,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private readonly string _modelPath;
     private readonly ConcurrentDictionary<int, CancellationTokenSource> _jobCts = new();
     private readonly KumoWatcher _kumo;
+    private readonly MeetBridge _meet = new(HuginnSettings.Current.MeetBridgePort);
     private readonly KumoMeetingDetector _detector;
     private readonly ConcurrentQueue<KumoSnapshot> _kumoReads = new();
     private readonly PresenceLog _presence = new(Paths.PresenceDir());
@@ -80,6 +81,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             QuietStopSeconds = s.KumoQuietStopSeconds,
         };
         _kumo.Snapshot += snap => _kumoReads.Enqueue(snap);
+        _meet.Events += (meeting, events) => Ui(() => OnMeetEvents(meeting, events));
         _kumo.StatusChanged += st => Ui(() => OnKumoStatus(st));
 
         _p.Meeting.LevelChanged += _p.Recorder.SetLevel;
@@ -146,6 +148,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     {
         HuginnLog.Write($"Huginn started ({Environment.OSVersion.Platform}, {(DictationEnabled ? "dictation on" : "dictation off")})");
         StartQuitWatcher();
+        _meet.Start();
         if (_p.Kumo.IsInstalled)
         {
             _p.Kumo.EnsureLaunchesWithPort(HuginnSettings.Current.KumoDebugPort);
@@ -975,6 +978,16 @@ internal sealed class HuginnEngine : IAsyncDisposable
 
     private const string KumoSource = "Kumospace";
 
+    // Hands, reactions and chat from a Google Meet call (the browser extension). Kept only while recording.
+    private void OnMeetEvents(string meeting, IReadOnlyList<KumoEvent> events)
+    {
+        if (!_p.Meeting.IsRecording || _timeline == null) return;
+        foreach (var e in events) _timeline.AddEvent(e);
+        if (_meetLogged != meeting) { _meetLogged = meeting; HuginnLog.Write($"meet: taking events from meeting {meeting}"); }
+    }
+
+    private string? _meetLogged;
+
     // A Kumospace meeting starts recording (automatically or from the pop-up); the detector then owns its stop.
     private void StartForKumo(long now, string reason, KumoSnapshot? snap)
     {
@@ -1014,6 +1027,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     {
         _quitWatcher?.Dispose();
         _kumoTimer?.Dispose();
+        _meet.Dispose();
         _callTimer?.Dispose();
         _previewTimer?.Dispose();
         _kumo.Dispose();

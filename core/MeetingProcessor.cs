@@ -71,7 +71,7 @@ internal static class MeetingProcessor
         var reconciled = TranscriptReconciler.DeEcho(Format(kept, cap.StartedLocal, source));
         // De-echo needs the Me/Them labels, so the names from Kumospace go on after it.
         var timeline = SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp));
-        var text = timeline == null ? reconciled.Text
+        var text = timeline == null || !timeline.HasKumospace ? reconciled.Text
             : NameSpeakers(reconciled.Text, kept.Where(k => k.speaker == "Them").Select(k => (k.start, themEnds.GetValueOrDefault((k.start, k.text), k.start))).ToList(), timeline, cap.Stamp);
         if (timeline != null && timeline.Events.Count > 0) text = AddEvents(text, timeline.Events);
         var echo = new EchoReport(me.Count, verdict.Silent, verdict.Echo, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagConfidence);

@@ -38,7 +38,17 @@ internal sealed class SpeakerTimeline
         catch { return Array.Empty<string>(); }
     }
 
-    public bool HasContent => Rooms.Count > 0 || People.Count > 0 || Remote.Count > 0 || Events.Count > 0;
+    public bool HasContent => HasKumospace || Events.Count > 0;
+
+    /// <summary>Kumospace heard or placed people in this recording, so its lines can be named.</summary>
+    public bool HasKumospace => Rooms.Count > 0 || People.Count > 0 || Remote.Count > 0;
+
+    /// <summary>One thing someone did, from any source (the Meet extension), at a wall-clock time.</summary>
+    public void AddEvent(KumoEvent e)
+    {
+        long off = e.T - StartUnixMs;
+        if (off >= -2000) Events.Add(new object[] { Math.Max(0, off), e.Kind, e.Who, e.Text });
+    }
 
     private int _shots;
 

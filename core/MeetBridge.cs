@@ -1,0 +1,167 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
+
+namespace Huginn;
+
+/// <summary>
+/// Takes what the Huginn browser extension sees in a Google Meet call (hands, reactions, chat) over a tiny HTTP
+/// listener on 127.0.0.1. The extension's background worker POSTs <c>/meet/events</c> with the header
+/// <c>X-Huginn: 1</c>; a web page cannot send that header to another origin without a CORS preflight, and this
+/// listener never answers one, so no page can write into a transcript. Nothing else is served.
+/// </summary>
+internal sealed class MeetBridge : IDisposable
+{
+    private readonly int _port;
+    private TcpListener? _listener;
+    private CancellationTokenSource? _cts;
+
+    public MeetBridge(int port) { _port = port; }
+
+    /// <summary>Raised on the listener's thread with each batch: the meeting code and its events.</summary>
+    public event Action<string, IReadOnlyList<KumoEvent>>? Events;
+
+    public void Start()
+    {
+        if (_listener != null || _port <= 0) return;
+        try
+        {
+            _listener = new TcpListener(IPAddress.Loopback, _port);
+            _listener.Start();
+        }
+        catch (Exception ex)
+        {
+            HuginnLog.Write($"meet: could not listen on 127.0.0.1:{_port}", ex);
+            _listener = null;
+            return;
+        }
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        _ = Task.Run(() => AcceptLoopAsync(ct));
+        HuginnLog.Write($"meet: listening for the browser extension on 127.0.0.1:{_port}");
+    }
+
+    private async Task AcceptLoopAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            TcpClient client;
+            try { client = await _listener!.AcceptTcpClientAsync(ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { break; }
+            catch (ObjectDisposedException) { break; }
+            catch (Exception ex) { HuginnLog.Write("meet: accept failed", ex); continue; }
+            _ = Task.Run(() => HandleAsync(client, ct));
+        }
+    }
+
+    private async Task HandleAsync(TcpClient client, CancellationToken ct)
+    {
+        using var _ = client;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        try
+        {
+            var stream = client.GetStream();
+            var req = await ReadRequestAsync(stream, timeout.Token).ConfigureAwait(false);
+            int status = req == null ? 400 : Handle(req.Value);
+            var reason = status switch { 204 => "No Content", 403 => "Forbidden", 404 => "Not Found", 413 => "Too Large", _ => "Bad Request" };
+            var head = Encoding.ASCII.GetBytes($"HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(head, timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or OperationCanceledException or SocketException) { /* the caller went away */ }
+        catch (Exception ex) { HuginnLog.Write("meet: request failed", ex); }
+    }
+
+    internal readonly record struct Request(string Method, string Path, Dictionary<string, string> Headers, string Body);
+
+    internal int Handle(Request r)
+    {
+        if (r.Method != "POST" || r.Path != "/meet/events") return 404;
+        if (!r.Headers.TryGetValue("x-huginn", out var h) || h != "1") return 403;
+        if (r.Headers.TryGetValue("origin", out var origin) && !origin.StartsWith("chrome-extension://", StringComparison.Ordinal)) return 403;
+        var (meeting, events) = Parse(r.Body);
+        if (events.Count > 0) Events?.Invoke(meeting, events);
+        return 204;
+    }
+
+    /// <summary>The body: <c>{"meeting":"abc-defg-hij","events":[{"t":1732000000000,"kind":"react","who":"Ana","text":"👍"}]}</c>.</summary>
+    internal static (string Meeting, List<KumoEvent> Events) Parse(string body)
+    {
+        var list = new List<KumoEvent>();
+        string meeting = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("meeting", out var m) && m.ValueKind == JsonValueKind.String) meeting = m.GetString() ?? "";
+            if (root.TryGetProperty("events", out var evs) && evs.ValueKind == JsonValueKind.Array)
+                foreach (var e in evs.EnumerateArray())
+                {
+                    if (!e.TryGetProperty("t", out var t) || !t.TryGetInt64(out var ms)) continue;
+                    var kind = Str(e, "kind");
+                    if (kind is not ("react" or "hand-up" or "hand-down" or "chat" or "share-start" or "share-stop")) continue;
+                    list.Add(new KumoEvent(ms, kind, Clip(Str(e, "who"), 120), Clip(Str(e, "text"), 4000)));
+                }
+        }
+        catch (JsonException) { /* a broken batch is dropped */ }
+        return (meeting, list);
+    }
+
+    private static string Str(JsonElement e, string p) =>
+        e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    private static string Clip(string s, int max) => s.Length <= max ? s : s[..max];
+
+    private const int MaxBody = 256 * 1024;
+
+    internal static async Task<Request?> ReadRequestAsync(Stream stream, CancellationToken ct)
+    {
+        var buf = new byte[8192];
+        var data = new MemoryStream();
+        int headerEnd = -1;
+        while (headerEnd < 0)
+        {
+            int n = await stream.ReadAsync(buf, ct).ConfigureAwait(false);
+            if (n == 0) return null;
+            data.Write(buf, 0, n);
+            if (data.Length > 16384) return null;
+            headerEnd = IndexOf(data.GetBuffer(), (int)data.Length, "\r\n\r\n"u8);
+        }
+        var headText = Encoding.ASCII.GetString(data.GetBuffer(), 0, headerEnd);
+        var lines = headText.Split("\r\n");
+        var first = lines[0].Split(' ');
+        if (first.Length < 2) return null;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var l in lines.Skip(1))
+        {
+            int c = l.IndexOf(':');
+            if (c > 0) headers[l[..c].Trim().ToLowerInvariant()] = l[(c + 1)..].Trim();
+        }
+        int length = headers.TryGetValue("content-length", out var cl) && int.TryParse(cl, out var len) ? len : 0;
+        if (length < 0 || length > MaxBody) return null;
+        int have = (int)data.Length - (headerEnd + 4);
+        var body = new byte[length];
+        Array.Copy(data.GetBuffer(), headerEnd + 4, body, 0, Math.Min(have, length));
+        while (have < length)
+        {
+            int n = await stream.ReadAsync(body.AsMemory(have, length - have), ct).ConfigureAwait(false);
+            if (n == 0) return null;
+            have += n;
+        }
+        return new Request(first[0], first[1], headers, Encoding.UTF8.GetString(body));
+    }
+
+    private static int IndexOf(byte[] hay, int len, ReadOnlySpan<byte> needle)
+    {
+        int i = hay.AsSpan(0, len).IndexOf(needle);
+        return i;
+    }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        try { _listener?.Stop(); } catch { /* already stopped */ }
+        _listener = null;
+    }
+}

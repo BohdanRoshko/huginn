@@ -34,6 +34,8 @@ internal sealed class HuginnSettings
     public double KumoAloneStopSeconds { get; set; } = 5;  // an auto recording stops after this long with nobody around
     public double KumoQuietStopSeconds { get; set; } = 180; // ...or after this long with no speech
     public double KumoMinSpeechSeconds { get; set; } = 20;  // an auto recording with less speech than this is deleted
+    // The Huginn browser extension (Google Meet hands, reactions, chat) posts to 127.0.0.1 on this port; 0 = off.
+    public int MeetBridgePort { get; set; } = 47821;
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 

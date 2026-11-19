@@ -154,6 +154,38 @@ internal sealed class Cleaner : IAsyncDisposable
         }
     }
 
+    private const string TitlePrompt =
+        "You name meetings. Given a meeting transcript, reply with a short title of 3 to 7 words that says what " +
+        "the meeting was about, like a calendar event name. Use the words the people used. No quotes, no names of " +
+        "people unless the meeting was about them, no full stop. Output ONLY the title.";
+
+    /// <summary>A short title for a meeting transcript (<see cref="MeetingName"/>). Empty when the model is not ready.</summary>
+    public async Task<string> TitleAsync(string speech)
+    {
+        if (!_ready) await PrepareAsync().ConfigureAwait(false);
+        if (!_ready) return "";
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_executor == null) return "";
+            var infer = new InferenceParams
+            {
+                MaxTokens = 24,
+                AntiPrompts = new List<string> { "<|im_end|>", "\n" },
+                SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.2f },
+            };
+            var prompt = $"<|im_start|>system\n{TitlePrompt}<|im_end|>\n<|im_start|>user\n{speech}<|im_end|>\n<|im_start|>assistant\n";
+            var sb = new StringBuilder();
+            await foreach (var tok in _executor.InferAsync(prompt, infer).ConfigureAwait(false)) sb.Append(tok);
+            return sb.ToString().Replace("<|im_end|>", "").Trim();
+        }
+        finally
+        {
+            _gate.Release();
+            RestartIdleTimer();
+        }
+    }
+
     public async Task UnloadAsync()
     {
         await _gate.WaitAsync().ConfigureAwait(false);

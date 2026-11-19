@@ -149,6 +149,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         HuginnLog.Write($"Huginn started ({Environment.OSVersion.Platform}, {(DictationEnabled ? "dictation on" : "dictation off")})");
         StartQuitWatcher();
         _meet.Start();
+        _ = NameUnnamedAsync();
         if (_p.Kumo.IsInstalled)
         {
             _p.Kumo.EnsureLaunchesWithPort(HuginnSettings.Current.KumoDebugPort);
@@ -662,6 +663,10 @@ internal sealed class HuginnEngine : IAsyncDisposable
             HuginnLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
             HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {r.Echo}{(r.RawTranscriptPath == null ? "" : " (raw kept)")}");
             Recent.SetTranscript(jobId, r.TranscriptPath);
+            // A name made here, so the row is named even when Odin is off or files nothing; Odin's title replaces it.
+            var localName = await MeetingName.MakeAsync(r.Text, _cleaner);
+            Recent.SetTitle(jobId, localName);
+            HuginnLog.Write($"meeting {cap.Stamp}: named \"{localName}\" here");
             Ui(() => _p.Notes.SetTranscriptReady(cap.Stamp));
             if (SendMeetings)
             {
@@ -714,6 +719,24 @@ internal sealed class HuginnEngine : IAsyncDisposable
             Interlocked.Decrement(ref _processingCount);
             UpdatePriority();
         }
+    }
+
+    // Rows from before Huginn named meetings itself, or filed while Odin was off, get a name once, in the background.
+    private async Task NameUnnamedAsync()
+    {
+        foreach (var row in Recent.Entries.Where(e => e.Title == null && !e.Cancelable).ToList())
+        {
+            try
+            {
+                var path = RecentMeetings.ResolveTranscript(row);
+                if (!File.Exists(path)) continue;
+                var name = await MeetingName.MakeAsync(await File.ReadAllTextAsync(path), _cleaner);
+                Recent.SetTitle(row.Id, name);
+                HuginnLog.Write($"meeting {row.Stamp}: named \"{name}\" here (it had no name)");
+            }
+            catch (Exception ex) { HuginnLog.Write($"meeting {row.Stamp}: could not be named", ex); }
+        }
+        _shell.Refresh();
     }
 
     // The screen snapshots go up after the note is filed, one by one; a failure loses only the pictures.

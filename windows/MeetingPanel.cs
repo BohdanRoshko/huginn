@@ -100,7 +100,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private const int MeterMaxH = 22; // bar height at full level: room above and below inside the 32 px well
     private const int JobsDividerY = 80;
     private const int JobsTop = 80;    // row content starts 4 px higher than the lines: half the top padding moved to the bottom
-    private const int RowH = 35;       // 3 px between a row's text and the line above it, and 3 px to the line below (Bohdan, 2026-11-20)
+    private const int RowH = 41;       // 6 px between a row's text and the line above it, and 6 px to the line below (Bohdan, 2026-11-20)
     private const int BottomPad = 12;
 
     public MeetingPanel(RecentMeetings recent)
@@ -339,7 +339,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         // A thin line between rows, so the buttons on the right are easy to match to their meeting.
         using (var lp = new Pen(RowLine))
             for (int i = 1; i < DisplayMax; i++)
-                g.DrawLine(lp, 16, JobsTop + i * RowH + 3, Width - 16, JobsTop + i * RowH + 3);
+                g.DrawLine(lp, 16, JobsTop + i * RowH, Width - 16, JobsTop + i * RowH);
 
         for (int i = 0; i < DisplayMax; i++)
         {
@@ -348,7 +348,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
             {
                 if (i == _hoverRow && _editingId == -1)
                 {
-                    using var hp = Rounded(new Rectangle(10, top + 4, Width - 20, RowH - 2), 6);
+                    using var hp = Rounded(new Rectangle(10, top + 1, Width - 20, RowH - 2), 6);
                     using var hb = new SolidBrush(RowHover);
                     g.FillPath(hb, hp);
                 }
@@ -520,8 +520,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private Rectangle CancelRect(int index)
     {
         int top = JobsTop + index * RowH;
-        // Centred between the lines above and below the row (they sit at top + 3 and top + RowH + 3).
-        return new Rectangle(Width - 36, top + 3 + RowH / 2 - 11, 22, 22);
+        // Centred between the lines above and below the row (they sit at top and top + RowH).
+        return new Rectangle(Width - 36, top + RowH / 2 - 11, 22, 22);
     }
 
     private static Color ToneColor(JobTone t) => t switch
@@ -665,8 +665,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
     // ---- rename (double-click a row, or right-click → Rename) ----
     private int RowAt(Point p)
     {
-        if (p.X < 16 || p.X > Width - 16 || p.Y < JobsTop + 4) return -1;
-        int i = (p.Y - JobsTop - 4) / RowH; // a row runs from the line above it to the line below
+        if (p.X < 16 || p.X > Width - 16 || p.Y < JobsTop) return -1;
+        int i = (p.Y - JobsTop) / RowH; // a row runs from the line above it to the line below
         return i < _entries.Count ? i : -1;
     }
 

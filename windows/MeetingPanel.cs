@@ -96,12 +96,12 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private static readonly Color Skeleton = Color.FromArgb(22, 255, 255, 255); // muted placeholder bar on the list surface
 
     private const int BaseH = 112;
-    private const int MeterCy = 61;   // mic-level meter center: the band between the header and the list
+    private const int MeterCy = 58;   // mic-level meter center: the band between the header and the list
     private const int MeterMaxH = 22; // bar height at full level: room above and below inside the 32 px well
-    private const int JobsDividerY = 80;
-    private const int JobsTop = 80;    // row content starts 4 px higher than the lines: half the top padding moved to the bottom
+    private const int JobsDividerY = 77;
+    private const int JobsTop = 77;
     private const int RowH = 41;       // 6 px between a row's text and the line above it, and 6 px to the line below (Bohdan, 2026-11-20)
-    private const int BottomPad = 12;
+    private const int BottomPad = 2;   // with the row's own 6 px, 8 px under the last row: the same as above the header
 
     public MeetingPanel(RecentMeetings recent)
     {
@@ -128,13 +128,13 @@ internal sealed class MeetingPanel : Form, IRecorderView
     }
 
     // ---- layout ----
-    private Rectangle IconTile => new(15, 13, 22, 22);
+    private Rectangle IconTile => new(15, 10, 22, 22);
     private Rectangle Pill => _recording
-        ? new Rectangle(Width - 14 - 80, 11, 80, 28)
-        : new Rectangle(Width - 14 - 96, 11, 96, 28);
+        ? new Rectangle(Width - 14 - 80, 8, 80, 28)
+        : new Rectangle(Width - 14 - 96, 8, 96, 28);
     /// <summary>The discard (trash) button — only while recording; sits left of the Stop pill. Icon-sized so
     /// it never collides with the elapsed-time header text.</summary>
-    private Rectangle TrashRect => new(Width - 14 - 80 - 8 - 28, 11, 28, 28);
+    private Rectangle TrashRect => new(Width - 14 - 80 - 8 - 28, 8, 28, 28);
 
     // ---- public API ----
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } Raise(); });
@@ -253,7 +253,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         }
 
         if (_recording)
-            TextRenderer.DrawText(g, $"REC  {Elapsed()}", _titleFont, new Point(46, 14), Red, TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, $"REC  {Elapsed()}", _titleFont, new Point(46, 11), Red, TextFormatFlags.NoPrefix);
 
         DrawActionPill(g, Pill, _recording);
         if (_recording) DrawTrash(g, TrashRect, _discardHover, _discardArmed);

@@ -53,7 +53,7 @@
       if (!inCall) { hands.clear(); stopChat(); chatOpens = 0; }
     }
     if (inCall) {
-      selfName = selfName || document.querySelector(SELF_NAME)?.textContent?.trim() || accountName();
+      selfName = selfName || document.querySelector(SELF_NAME)?.textContent?.trim() || selfTileName() || accountName();
       scanHands();
       watchChat();
     }
@@ -68,6 +68,13 @@
     if (!name || (hands.get(name) || false) === up) return;
     hands.set(name, up);
     push(up ? "hand-up" : "hand-down", name, "");
+  }
+
+  // My own tile is the one with the camera-effects buttons on it (seen 2026-11-20); its name is my name.
+  const isSelfTile = (tile) => !!tile.querySelector('[aria-label*="visual effects" i], [aria-label*="backgrounds and effects" i], [aria-label*="framing" i]');
+  function selfTileName() {
+    const tile = [...document.querySelectorAll("[data-participant-id]")].find(isSelfTile);
+    return tile ? tileName(tile) : "";
   }
 
   // A tile's person: its first "notranslate" text that is not an icon (icons are notranslate too).
@@ -89,8 +96,9 @@
     const up = new Set();
     const seen = new Set();
     for (const tile of document.querySelectorAll("[data-participant-id]")) {
+      if (isSelfTile(tile)) continue; // my own tile: the hand button above says it better
       const name = me(tileName(tile));
-      if (!name || name === me("")) continue; // my own tile: the button above says it better
+      if (!name || name === me("")) continue;
       seen.add(name);
       if ([...tile.querySelectorAll(ICONS)].some((e) => e.textContent.trim() === "front_hand")) up.add(name);
     }
@@ -164,7 +172,8 @@
       const text = (m.querySelector('[jsname="dTKtvb"]')?.textContent || "").trim();
       if (!text) continue; // still being drawn; the next change reads it
       chatSeen.add(id);
-      push("chat", chatSender(m), text);
+      // A message I send gets a second id once the server has it, so the same words twice in 15 s count once.
+      push("chat", chatSender(m), text, 15000);
     }
   }
 

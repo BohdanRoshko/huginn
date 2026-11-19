@@ -127,7 +127,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
     // The countdown waits while the mouse is on the pill, so the note can be read; it goes on where it stopped.
     private void SetOver(bool over)
     {
-        if (over == _over || _hiding.IsRunning) return;
+        if (over == _over || _hiding.IsRunning || !_shown.IsRunning) return;
         _over = over;
         if (over)
         {
@@ -149,6 +149,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
     {
         _timeout.Stop();
         _menu.Close();
+        _over = false; // a mouse leaving a closed pop-up must not start its countdown again
         if (Visible && !_hiding.IsRunning) _hiding.Restart();   // the frame loop fades it out, then hides it
     });
 

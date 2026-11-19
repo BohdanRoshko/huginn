@@ -14,7 +14,9 @@ namespace Huginn;
 /// and an arrow with the other choices). Sizes and colours were measured from Notion's pop-up on this screen (2026-11-18);
 /// "Not now" is ours, so a dismiss is one click (2026-11-19). It never takes focus from the call. It goes away on a
 /// choice, when the call ends, or after <see cref="ShowSeconds"/>; a thin bar along its bottom edge fills as that time
-/// runs out, as Notion's does. It fades and drops in, and fades out.
+/// runs out, as Notion's does. It fades and drops in, and fades out. Under the mouse it grows as Notion's does
+/// (measured from Notion's on this screen, 2026-11-20): a lighter strip under the pill with a note running across it,
+/// and a round close button on the top-left corner. The countdown waits while the mouse is on it.
 /// </summary>
 internal sealed class CallPrompt : Form, ICallPrompt
 {
@@ -24,7 +26,10 @@ internal sealed class CallPrompt : Form, ICallPrompt
     // The layout, in design units (Notion's sizes). It is drawn at Shrink x the screen's DPI scale, in whole pixels.
     private const int Pad = 14;                 // room for the shadow around the pill
     private const int PillW = 556, PillH = 61;   // Notion's 460 plus room for "Not now"
-    private const int W = PillW + 2 * Pad, H = PillH + 2 * Pad;
+    private const int ExtraH = 27;                // the strip the pill grows under the mouse
+    private const double ExpandSeconds = 0.18, RunPixelsPerSecond = 34, RunPauseSeconds = 0.7;
+    private const int RunGap = 21;                // between the end of the note and its next start, as Notion's
+    private const int W = PillW + 2 * Pad, H = PillH + ExtraH + 2 * Pad;
     private const float Shrink = 0.85f;          // 15% smaller than Notion's (Bohdan, 2026-11-18)
     private static readonly Rectangle Pill = new(Pad, Pad, PillW, PillH);
     private static readonly Rectangle Button = new(Pad + PillW - 15 - 176, Pad + 12, 176, 36);
@@ -32,6 +37,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
     private static readonly Rectangle Main = new(Button.X, Button.Y, Button.Width - Arrow.Width, Button.Height);
     private static readonly Rectangle NotNow = new(Button.X - 8 - 88, Button.Y, 88, Button.Height);
     private static readonly Rectangle Tile = new(Pill.X + 22, Pill.Y + 14, 32, 33);
+    private static readonly Rectangle Close = new(Pill.X + 7 - 12, Pill.Y + 9 - 12, 24, 24); // Notion's close button, centred on the corner
 
     private static readonly Color Bg = Color.FromArgb(32, 32, 32);          // #202020
     private static readonly Color Edge = Color.FromArgb(40, 255, 255, 255);
@@ -42,16 +48,22 @@ internal sealed class CallPrompt : Form, ICallPrompt
     private static readonly Color Quiet = Color.FromArgb(20, 255, 255, 255);       // "Not now": a quiet fill, so it reads as a button
     private static readonly Color QuietHover = Color.FromArgb(36, 255, 255, 255);
     private static readonly Color QuietText = Color.FromArgb(226, 224, 220);
+    private static readonly Color Strip = Color.FromArgb(56, 56, 54);         // #383836, the grown strip
+    private static readonly Color NoteText = Color.FromArgb(172, 171, 167);
+    private static readonly Color CloseRing = Color.FromArgb(56, 56, 56);
+    private static readonly Color CloseMark = Color.FromArgb(172, 172, 172);
 
     private float _k;                 // device pixels per design unit
     private int _sw, _sh;             // window size in device pixels
     private Point _home;              // where the window rests once it has dropped in
-    private Font? _title, _sub, _button, _quiet;
+    private Font? _title, _sub, _button, _quiet, _note;
     private readonly System.Windows.Forms.Timer _timeout = new() { Interval = ShowSeconds * 1000 };
     private readonly ContextMenuStrip _menu = new();
-    private readonly Stopwatch _shown = new(), _hiding = new();
+    private readonly Stopwatch _shown = new(), _hiding = new(), _left = new(), _expandClock = new(), _lastFrame = new();
+    private bool _over;               // the mouse is on the pill
+    private double _expand;           // 0 = a pill, 1 = grown by ExtraH
     private string _app = "";
-    private int _hover; // 0 none, 1 main, 2 arrow, 3 not now
+    private int _hover; // 0 none, 1 main, 2 arrow, 3 not now, 4 close
 
     // Frames: a background thread waits for each screen refresh (DwmFlush) and asks the UI thread for one frame, so
     // the countdown bar moves once per refresh and never stutters. It runs only while the pop-up is on screen.
@@ -94,6 +106,9 @@ internal sealed class CallPrompt : Form, ICallPrompt
     {
         _app = app;
         _hover = 0;
+        _over = false;
+        _expand = 0;
+        _left.Restart();
         // Top centre of the main screen, always (Bohdan's choice, 2026-11-18; not the screen with the active window).
         var screen = Screen.PrimaryScreen ?? Screen.AllScreens[0];
         Layout(GetDpiForWindow(Handle) / 96f);
@@ -104,9 +119,31 @@ internal sealed class CallPrompt : Form, ICallPrompt
         Frame();
         if (!Visible) Show();
         _timeout.Stop();
+        _timeout.Interval = ShowSeconds * 1000;
         _timeout.Start();
         StartFrames();
     });
+
+    // The countdown waits while the mouse is on the pill, so the note can be read; it goes on where it stopped.
+    private void SetOver(bool over)
+    {
+        if (over == _over || _hiding.IsRunning) return;
+        _over = over;
+        if (over)
+        {
+            _left.Stop();
+            _timeout.Stop();
+            _expandClock.Restart();
+        }
+        else
+        {
+            _left.Start();
+            _timeout.Interval = Math.Max(500, ShowSeconds * 1000 - (int)_left.ElapsedMilliseconds);
+            _timeout.Start();
+        }
+    }
+
+    private string Note => $"Huginn records your microphone and the {_app} audio on this computer. By starting, you confirm everyone in the call knows it is recorded.";
 
     public void HidePrompt() => Ui(() =>
     {
@@ -118,18 +155,21 @@ internal sealed class CallPrompt : Form, ICallPrompt
     protected override void OnMouseMove(MouseEventArgs e)
     {
         var at = Design(e.Location);
-        int h = Main.Contains(at) ? 1 : Arrow.Contains(at) ? 2 : NotNow.Contains(at) ? 3 : 0;
+        bool onClose = _expand > 0.5 && Close.Contains(at);
+        SetOver(onClose || new Rectangle(Pill.X, Pill.Y, Pill.Width, Pill.Height + (int)(ExtraH * _expand)).Contains(at));
+        int h = onClose ? 4 : Main.Contains(at) ? 1 : Arrow.Contains(at) ? 2 : NotNow.Contains(at) ? 3 : 0;
         Cursor = h == 0 ? Cursors.Default : Cursors.Hand;
         _hover = h;
     }
 
-    protected override void OnMouseLeave(EventArgs e) => _hover = 0;
+    protected override void OnMouseLeave(EventArgs e) { _hover = 0; SetOver(false); }
 
     protected override void OnMouseUp(MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left || _hiding.IsRunning) return;
         var at = Design(e.Location);
-        if (Main.Contains(at)) StartRequested?.Invoke();
+        if (_expand > 0.5 && Close.Contains(at)) OptionChosen?.Invoke("not now");
+        else if (Main.Contains(at)) StartRequested?.Invoke();
         else if (NotNow.Contains(at)) OptionChosen?.Invoke("not now");
         else if (Arrow.Contains(at)) _menu.Show(this, new Point(Px(Arrow.Left), Px(Arrow.Bottom + 6)));
     }
@@ -159,6 +199,10 @@ internal sealed class CallPrompt : Form, ICallPrompt
     {
         _framePending = 0;
         if (IsDisposed) return;
+        // The grow and shrink: a constant rate toward the target, eased when drawn.
+        var dt = _lastFrame.IsRunning ? Math.Min(0.1, _lastFrame.Elapsed.TotalSeconds) : 0;
+        _lastFrame.Restart();
+        _expand = Math.Clamp(_expand + (_over ? dt : -dt) / ExpandSeconds, 0, 1);
         double opacity, drop;
         if (_hiding.IsRunning)
         {
@@ -199,6 +243,8 @@ internal sealed class CallPrompt : Form, ICallPrompt
         _sub = new Font("Segoe UI", 12.7f * k, FontStyle.Regular, GraphicsUnit.Pixel);
         _button = new Font("Segoe UI Semibold", 13.3f * k, FontStyle.Regular, GraphicsUnit.Pixel);
         _quiet = new Font("Segoe UI Semibold", 13.3f * k, FontStyle.Regular, GraphicsUnit.Pixel);
+        _note?.Dispose();
+        _note = new Font("Segoe UI", 13f * k, FontStyle.Regular, GraphicsUnit.Pixel);
         FreeSurface();
         _canvas = new Bitmap(_sw, _sh, PixelFormat.Format32bppPArgb);
         var info = new BITMAPINFO { biSize = 40, biWidth = _sw, biHeight = -_sh, biPlanes = 1, biBitCount = 32 };
@@ -240,24 +286,28 @@ internal sealed class CallPrompt : Form, ICallPrompt
 
     private void Draw(Graphics g)
     {
+        var grow = (float)(_expand * _expand * (3 - 2 * _expand)); // smoothstep
         var pill = D(Pill);
+        pill.Height = MathF.Round(pill.Height + ExtraH * _k * grow);
+        var radius = Px(PillH) / 2f; // Notion's keeps its round ends when it grows
 
         // Soft shadow: a few widening, fading rounded rects under the pill.
         for (int i = Pad; i > 0; i -= 2)
         {
             var r = new RectangleF(pill.X - i * _k / 2, pill.Y - i * _k / 4, pill.Width + i * _k, pill.Height + i * _k);
-            using var shadow = Rounded(r, r.Height / 2);
+            using var shadow = Rounded(r, r.Height / 2 < radius + i * _k / 2 ? r.Height / 2 : radius + i * _k / 2);
             using var b = new SolidBrush(Color.FromArgb(Math.Max(2, 22 - i), 0, 0, 0));
             g.FillPath(b, shadow);
         }
 
-        using (var body = Rounded(pill, pill.Height / 2))
+        using (var body = Rounded(pill, radius))
         {
             using (var bg = new SolidBrush(Bg)) g.FillPath(bg, body);
+            if (grow > 0.01f) DrawNote(g, body, pill, grow);
 
             // The countdown: a thin warm-grey bar along the bottom edge, filling left to right as the time runs out.
             // Its width is fractional, so its edge moves smoothly between pixels.
-            var elapsed = Math.Clamp(_shown.Elapsed.TotalSeconds / ShowSeconds, 0, 1);
+            var elapsed = Math.Clamp(_left.Elapsed.TotalSeconds / ShowSeconds, 0, 1);
             var clip = g.Clip;
             g.SetClip(body);
             float barH = Math.Max(2, MathF.Round(2 * _k));
@@ -266,7 +316,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
             g.Clip = clip;
         }
         // The edge: a 1-pixel line on the pixel grid, half a pixel inside the pill.
-        using (var edgePath = Rounded(RectangleF.Inflate(pill, -0.5f, -0.5f), (pill.Height - 1) / 2))
+        using (var edgePath = Rounded(RectangleF.Inflate(pill, -0.5f, -0.5f), radius - 0.5f))
         using (var edge = new Pen(Edge, 1f))
             g.DrawPath(edge, edgePath);
 
@@ -326,6 +376,54 @@ internal sealed class CallPrompt : Form, ICallPrompt
             float cx = arrow.X + arrow.Width / 2f - _k, cy = arrow.Y + arrow.Height / 2f;
             g.DrawLines(chevron, new[] { new PointF(cx - 4.5f * _k, cy - 2f * _k), new PointF(cx, cy + 2.5f * _k), new PointF(cx + 4.5f * _k, cy - 2f * _k) });
         }
+        if (grow > 0.01f) DrawClose(g, grow);
+    }
+
+    // The grown strip: lighter grey from the pill's bottom edge down, with the note running right to left across
+    // its whole width when it is wider than the strip. The pill's round ends clip it, as Notion's do.
+    private void DrawNote(Graphics g, GraphicsPath body, RectangleF pill, float grow)
+    {
+        var strip = new RectangleF(pill.X, Px(Pill.Y + PillH), pill.Width, pill.Bottom - Px(Pill.Y + PillH));
+        if (strip.Height <= 0) return;
+        var clip = g.Clip;
+        g.SetClip(body);
+        g.IntersectClip(strip);
+        using (var sb = new SolidBrush(Strip)) g.FillRectangle(sb, strip);
+        var size = g.MeasureString(Note, _note!, PointF.Empty, StringFormat.GenericTypographic);
+        float start = pill.X + Px(22), x = start, gap = Px(RunGap);
+        bool runs = start + size.Width > pill.Right - Px(22);
+        if (runs)
+        {
+            var run = Math.Max(0, _expandClock.Elapsed.TotalSeconds - RunPauseSeconds) * RunPixelsPerSecond * _k / Shrink;
+            x = start - (float)(run % (size.Width + gap));
+        }
+        // The text sits in the middle of the full strip, so it slides up into place as the strip opens.
+        float y = MathF.Round(Px(Pill.Y + PillH) + (Px(ExtraH) - size.Height) / 2);
+        using (var ink = new SolidBrush(Color.FromArgb((int)(255 * grow), NoteText)))
+        {
+            g.DrawString(Note, _note!, ink, x, y, StringFormat.GenericTypographic);
+            if (runs) g.DrawString(Note, _note!, ink, x + size.Width + gap, y, StringFormat.GenericTypographic);
+        }
+        g.Clip = clip;
+    }
+
+    // Notion's round close button, on the pill's top-left corner while the mouse is on it.
+    private void DrawClose(Graphics g, float grow)
+    {
+        var c = D(Close);
+        int a = (int)(255 * grow);
+        using (var circle = new GraphicsPath())
+        {
+            circle.AddEllipse(c);
+            using var fill = new SolidBrush(Color.FromArgb(a, _hover == 4 ? Color.FromArgb(44, 44, 44) : Bg));
+            g.FillPath(fill, circle);
+        }
+        using (var ring = new Pen(Color.FromArgb(a, CloseRing), 1f))
+            g.DrawEllipse(ring, RectangleF.Inflate(c, -0.5f, -0.5f));
+        float cx = c.X + c.Width / 2f, cy = c.Y + c.Height / 2f, h = 4.5f * _k / Shrink * 0.85f;
+        using var mark = new Pen(Color.FromArgb(a, CloseMark), 1.5f * _k / Shrink * 0.85f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        g.DrawLine(mark, cx - h, cy - h, cx + h, cy + h);
+        g.DrawLine(mark, cx + h, cy - h, cx - h, cy + h);
     }
 
     // Design units → device pixels, snapped to whole pixels so edges land on the grid.
@@ -371,7 +469,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
         if (disposing)
         {
             _timeout.Dispose(); _menu.Dispose();
-            _title?.Dispose(); _sub?.Dispose(); _button?.Dispose(); _quiet?.Dispose();
+            _title?.Dispose(); _sub?.Dispose(); _button?.Dispose(); _quiet?.Dispose(); _note?.Dispose();
         }
         FreeSurface();
         base.Dispose(disposing);

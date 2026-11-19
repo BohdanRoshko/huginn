@@ -9,16 +9,16 @@ namespace Huginn;
 
 /// <summary>
 /// The "Start meeting recording" pop-up, laid out like Notion's meeting pop-up: a dark pill at the top centre of the
-/// screen with an icon tile, a title and a subtitle, and a blue split button ("Start recording" and an arrow with the
-/// other choices). Sizes and colours were measured from Notion's pop-up on this screen (2026-11-18). It never takes
-/// focus from the call. It goes away on a choice, when the call ends, or after <see cref="ShowSeconds"/>; a thin bar
+/// screen with an icon tile, a title and a subtitle, a grey "Not now" button, and a blue split button ("Start recording"
+/// and an arrow with the other choices). Sizes and colours were measured from Notion's pop-up on this screen (2026-11-18);
+/// "Not now" is ours, so a dismiss is one click (2026-11-19). It never takes focus from the call. It goes away on a choice, when the call ends, or after <see cref="ShowSeconds"/>; a thin bar
 /// along its bottom edge fills as that time runs out, as Notion's does.
 /// </summary>
 internal sealed class CallPrompt : Form, ICallPrompt
 {
-    private const int ShowSeconds = 30;
+    private const int ShowSeconds = 15;      // half of Notion's 30 (Bohdan, 2026-11-19)
     private const int Pad = 14;                 // room for the shadow around the pill
-    private const int PillW = 460, PillH = 61;
+    private const int PillW = 556, PillH = 61;   // Notion's 460 plus room for "Not now"
     private const int W = PillW + 2 * Pad, H = PillH + 2 * Pad;   // design size: everything below is laid out in it
     private const float Scale = 0.85f;                              // drawn 15% smaller than Notion's (Bohdan, 2026-11-18)
     private static readonly int SW = (int)Math.Ceiling(W * Scale), SH = (int)Math.Ceiling(H * Scale);
@@ -26,6 +26,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
     private static readonly Rectangle Button = new(Pad + PillW - 15 - 176, Pad + 12, 176, 36);
     private static readonly Rectangle Arrow = new(Button.Right - 31, Button.Y, 31, Button.Height);
     private static readonly Rectangle Main = new(Button.X, Button.Y, Button.Width - Arrow.Width, Button.Height);
+    private static readonly Rectangle NotNow = new(Button.X - 8 - 88, Button.Y, 88, Button.Height);
 
     private static readonly Color Bg = Color.FromArgb(32, 32, 32);          // #202020
     private static readonly Color Edge = Color.FromArgb(40, 255, 255, 255);
@@ -33,16 +34,20 @@ internal sealed class CallPrompt : Form, ICallPrompt
     private static readonly Color BlueHover = Color.FromArgb(58, 145, 230);
     private static readonly Color Sub = Color.FromArgb(155, 154, 152);
     private static readonly Color Countdown = Color.FromArgb(125, 122, 117);
+    private static readonly Color Quiet = Color.FromArgb(20, 255, 255, 255);       // "Not now": a quiet fill, so it reads as a button
+    private static readonly Color QuietHover = Color.FromArgb(36, 255, 255, 255);
+    private static readonly Color QuietText = Color.FromArgb(226, 224, 220);
 
     private readonly Font _title = new("Segoe UI", 10.5f, FontStyle.Bold);
     private readonly Font _sub = new("Segoe UI", 9.5f);
     private readonly Font _button = new("Segoe UI", 10f, FontStyle.Bold);
+    private readonly Font _quiet = new("Segoe UI Semibold", 10f);
     private readonly System.Windows.Forms.Timer _timeout = new() { Interval = ShowSeconds * 1000 };
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 100 }; // redraws the countdown bar
     private DateTime _shownAt;
     private readonly ContextMenuStrip _menu = new();
     private string _app = "";
-    private int _hover; // 0 none, 1 main, 2 arrow
+    private int _hover; // 0 none, 1 main, 2 arrow, 3 not now
 
     public event Action? StartRequested;
     public event Action<string>? OptionChosen;
@@ -55,7 +60,6 @@ internal sealed class CallPrompt : Form, ICallPrompt
         Size = new Size(SW, SH);
         _timeout.Tick += (_, _) => { _timeout.Stop(); OptionChosen?.Invoke("not now"); };
         _tick.Tick += (_, _) => { if (Visible) Render(); };
-        _menu.Items.Add("Not now", null, (_, _) => OptionChosen?.Invoke("not now"));
         _menu.Items.Add("Always record meetings automatically", null, (_, _) => OptionChosen?.Invoke("auto"));
         _menu.Items.Add("Don't ask again", null, (_, _) => OptionChosen?.Invoke("off"));
         _ = Handle;
@@ -100,7 +104,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
     protected override void OnMouseMove(MouseEventArgs e)
     {
         var at = Design(e.Location);
-        int h = Main.Contains(at) ? 1 : Arrow.Contains(at) ? 2 : 0;
+        int h = Main.Contains(at) ? 1 : Arrow.Contains(at) ? 2 : NotNow.Contains(at) ? 3 : 0;
         Cursor = h == 0 ? Cursors.Default : Cursors.Hand;
         if (h != _hover) { _hover = h; Render(); }
     }
@@ -115,6 +119,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
         if (e.Button != MouseButtons.Left) return;
         var at = Design(e.Location);
         if (Main.Contains(at)) StartRequested?.Invoke();
+        else if (NotNow.Contains(at)) OptionChosen?.Invoke("not now");
         else if (Arrow.Contains(at)) _menu.Show(this, new Point((int)(Arrow.Left * Scale), (int)((Arrow.Bottom + 6) * Scale)));
     }
 
@@ -179,7 +184,15 @@ internal sealed class CallPrompt : Form, ICallPrompt
         using (var w = new SolidBrush(Color.White)) g.DrawString("Start Meeting Recording", _title, w, tx, Pill.Y + 13);
         using (var sb = new SolidBrush(Sub))
         using (var fmt = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString($"{_app} detected", _sub, sb, new RectangleF(tx + 1, Pill.Y + 33, Button.X - tx - 8, 20), fmt);
+            g.DrawString($"{_app} detected", _sub, sb, new RectangleF(tx + 1, Pill.Y + 33, NotNow.X - tx - 12, 20), fmt);
+
+        // "Not now": the same height and shape as the blue button, grey and quiet, so Start recording stays the focus.
+        using (var np = Rounded(NotNow, NotNow.Height / 2f))
+        using (var nb = new SolidBrush(_hover == 3 ? QuietHover : Quiet))
+            g.FillPath(nb, np);
+        using (var qt = new SolidBrush(QuietText))
+        using (var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            g.DrawString("Not now", _quiet, qt, NotNow, center);
 
         // Split button, fully rounded: "Start recording" | ⌄
         using (var bp = Rounded(Button, Button.Height / 2f))
@@ -252,7 +265,7 @@ internal sealed class CallPrompt : Form, ICallPrompt
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { _timeout.Dispose(); _tick.Dispose(); _menu.Dispose(); _title.Dispose(); _sub.Dispose(); _button.Dispose(); }
+        if (disposing) { _timeout.Dispose(); _tick.Dispose(); _menu.Dispose(); _title.Dispose(); _sub.Dispose(); _button.Dispose(); _quiet.Dispose(); }
         base.Dispose(disposing);
     }
 

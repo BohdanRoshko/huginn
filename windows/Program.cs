@@ -5,8 +5,20 @@ namespace Huginn;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        // `Huginn.exe --preview-prompt`: shows only the meeting pop-up, for checking its look; the running Huginn is untouched.
+        if (args.Contains("--preview-prompt"))
+        {
+            ApplicationConfiguration.Initialize();
+            using var prompt = new CallPrompt();
+            prompt.StartRequested += Application.Exit;
+            prompt.OptionChosen += _ => Application.Exit();
+            prompt.ShowPrompt("Zoom");
+            Application.Run();
+            return;
+        }
+
         // One instance only — a second keyboard hook would double every keystroke.
         using var mutex = new Mutex(true, "Huginn_SingleInstance", out bool isNew);
         if (!isNew)

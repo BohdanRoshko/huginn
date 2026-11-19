@@ -116,12 +116,13 @@ internal sealed class MacMicUsers : IMicUsers
 }
 
 /// <summary>The "Start meeting recording" pop-up on the Mac, laid out like Notion's: a dark pill at the top centre of the
-/// screen, under the menu bar, with an icon tile, a title, a subtitle and a blue split button. Never takes focus.</summary>
+/// screen, under the menu bar, with an icon tile, a title, a subtitle, a grey "Not now" button and a blue split button.
+/// Never takes focus.</summary>
 internal sealed class MacCallPrompt : ICallPrompt
 {
-    private const double W = 460, H = 61;   // design size: the view draws in it
+    private const double W = 556, H = 61;   // design size: Notion's 460 plus room for "Not now"
     private const double Scale = 0.85;       // shown 15% smaller than Notion's (Bohdan, 2026-11-18)
-    private const int ShowSeconds = 30;
+    private const int ShowSeconds = 15;      // half of Notion's 30 (Bohdan, 2026-11-19)
     private readonly NSPanel _panel;
     private readonly PromptView _view;
     private readonly NSMenu _menu;
@@ -143,12 +144,12 @@ internal sealed class MacCallPrompt : ICallPrompt
         };
         _panel.IsOpaque = false;
         _menu = new NSMenu { AutoEnablesItems = false };
-        _menu.AddItem(new NSMenuItem("Not now", (_, _) => OptionChosen?.Invoke("not now")));
         _menu.AddItem(new NSMenuItem("Always Record Meetings Automatically", (_, _) => OptionChosen?.Invoke("auto")));
         _menu.AddItem(new NSMenuItem("Don't Ask Again", (_, _) => OptionChosen?.Invoke("off")));
         _view = new PromptView(new CGRect(0, 0, W * Scale, H * Scale))
         {
             OnStart = () => StartRequested?.Invoke(),
+            OnNotNow = () => OptionChosen?.Invoke("not now"),
             OnArrow = point => _menu.PopUpMenu(null, point, _view),
         };
         // Bounds in design units, frame 15% smaller: AppKit scales the drawing and the mouse points.
@@ -187,11 +188,13 @@ internal sealed class MacCallPrompt : ICallPrompt
         public string App = "";
         public DateTime ShownAt = DateTime.Now;
         public Action? OnStart;
+        public Action? OnNotNow;
         public Action<CGPoint>? OnArrow;
         // Measured from Notion's pop-up (2026-11-18): button 176 x 36, fully rounded, 15 px from the right.
         private static readonly CGRect Button = new(W - 15 - 176, 12, 176, 36);
         private static readonly CGRect Arrow = new(Button.Right - 31, Button.Y, 31, Button.Height);
         private static readonly CGRect Main = new(Button.X, Button.Y, Button.Width - Arrow.Width, Button.Height);
+        private static readonly CGRect NotNow = new(Button.X - 8 - 88, Button.Y, 88, Button.Height);
 
         public PromptView(CGRect frame) : base(frame) { }
 
@@ -235,6 +238,16 @@ internal sealed class MacCallPrompt : ICallPrompt
                 Font = NSFont.SystemFontOfSize((nfloat)12.5), ForegroundColor = C(155, 154, 152),
             }).DrawAtPoint(new CGPoint(tx + 1, 32));
 
+            // "Not now": the same shape as the blue button, grey and quiet, so Start recording stays the focus.
+            C(255, 255, 255, 0.08).SetFill();
+            NSBezierPath.FromRoundedRect(NotNow, NotNow.Height / 2, NotNow.Height / 2).Fill();
+            var quiet = new NSAttributedString("Not now", new NSStringAttributes
+            {
+                Font = NSFont.SystemFontOfSize(13.5f, NSFontWeight.Semibold), ForegroundColor = C(226, 224, 220),
+            });
+            var qs = quiet.Size;
+            quiet.DrawAtPoint(new CGPoint(NotNow.X + (NotNow.Width - qs.Width) / 2, NotNow.Y + (NotNow.Height - qs.Height) / 2));
+
             C(39, 131, 222).SetFill();
             NSBezierPath.FromRoundedRect(Button, Button.Height / 2, Button.Height / 2).Fill();
             C(255, 255, 255, 0.18).SetStroke();
@@ -261,6 +274,7 @@ internal sealed class MacCallPrompt : ICallPrompt
         {
             var p = ConvertPointFromView(theEvent.LocationInWindow, null);
             if (Main.Contains(p)) OnStart?.Invoke();
+            else if (NotNow.Contains(p)) OnNotNow?.Invoke();
             else if (Arrow.Contains(p)) OnArrow?.Invoke(new CGPoint(Arrow.X, Arrow.Bottom + 6));
         }
     }

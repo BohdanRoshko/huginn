@@ -178,7 +178,7 @@ internal interface ICallPrompt
     void HidePrompt();
     /// <summary>The user clicked Start recording.</summary>
     event Action? StartRequested;
-    /// <summary>The user picked an option from the arrow menu: "not now", "auto" or "off".</summary>
+    /// <summary>The user clicked Not now ("not now"), or picked from the arrow menu ("auto" or "off"). The time running out is "not now" too.</summary>
     event Action<string>? OptionChosen;
 }
 

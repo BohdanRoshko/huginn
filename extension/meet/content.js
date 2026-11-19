@@ -21,6 +21,7 @@
 
   function push(kind, who, text, dedupeMs) {
     who = me(who);
+    if (kind === "react") text = (text || "").replace(/[\s.!]+$/u, ""); // "reacted with 👍." from an announcement
     const key = `${kind}|${who}|${text || ""}`;
     const now = Date.now();
     if (dedupeMs && now - (recent.get(key) || 0) < dedupeMs) return;
@@ -36,6 +37,12 @@
     catch { /* the extension was reloaded; this page keeps the old script until a reload */ }
   }
 
+  // The signed-in Google account's name, from the account button ("Google Account: Name (email)").
+  function accountName() {
+    const label = document.querySelector('[aria-label^="Google Account:"]')?.getAttribute("aria-label") || "";
+    return (label.match(/^Google Account:\s*(.+?)\s*(?:\(|$)/) || [])[1] || "";
+  }
+
   // ---- in a call: the red hang-up button is on screen ----
   setInterval(() => {
     const now = icons("call_end").length > 0;
@@ -45,7 +52,7 @@
       if (inCall) startChat(); else { hands.clear(); stopChat(); }
     }
     if (inCall) {
-      selfName = selfName || document.querySelector(SELF_NAME)?.textContent?.trim() || "";
+      selfName = selfName || document.querySelector(SELF_NAME)?.textContent?.trim() || accountName();
       scanHands();
     }
     for (const [k, t] of recent) if (Date.now() - t > 60000) recent.delete(k);
@@ -85,7 +92,7 @@
     let m;
     if ((m = text.match(/^(.+?) (?:has )?raised (?:a|their|his|her|your) hand/i))) setHand(m[1], true);
     else if ((m = text.match(/^(.+?) (?:has )?lowered (?:a|their|his|her|your) hand/i))) setHand(m[1], false);
-    else if ((m = text.match(/^(.+?) reacted with (.+)$/i))) push("react", m[1], m[2].trim(), 3000);
+    else if ((m = text.match(/^(.+?) reacted with (.+)$/i))) push("react", m[1], m[2].trim(), 4000);
   }
 
   // ---- reactions: an emoji image that floats up with the sender's name ----
@@ -106,7 +113,7 @@
       const t = (el.innerText || "").trim();
       if (t && t.length <= 60 && !/\p{Extended_Pictographic}/u.test(t)) who = t.split("\n")[0];
     }
-    if (who) push("react", who, emoji, 2000);
+    if (who) push("react", who, emoji, 4000);
   }
 
   // ---- chat: the message list, opened once so Meet puts it in the page (it stays after the panel closes) ----

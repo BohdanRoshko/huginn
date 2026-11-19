@@ -959,7 +959,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
                 KumoStatusText = KumoWatchingText();
                 _shell.Refresh();
             }
-            if (_p.Meeting.IsRecording && _current is { } cur) _timeline?.Add(snap, cur.Stamp);
+            // Kumospace data belongs to a Kumospace recording or one started by hand, not to a Meet or Zoom call.
+            if (_p.Meeting.IsRecording && _current is { } cur && (_source == null || _source == KumoSource)) _timeline?.Add(snap, cur.Stamp);
         }
         var (action, reason) = _detector.Tick(now, snap, _p.Meeting.IsRecording);
         // Asked about a Kumospace meeting and now nobody is around: the question is moot.
@@ -981,12 +982,10 @@ internal sealed class HuginnEngine : IAsyncDisposable
     // Hands, reactions and chat from a Google Meet call (the browser extension). Kept only while recording.
     private void OnMeetEvents(string meeting, IReadOnlyList<KumoEvent> events)
     {
-        if (!_p.Meeting.IsRecording || _timeline == null) return;
-        foreach (var e in events) _timeline.AddEvent(e);
-        if (_meetLogged != meeting) { _meetLogged = meeting; HuginnLog.Write($"meet: taking events from meeting {meeting}"); }
+        bool keep = _p.Meeting.IsRecording && _timeline != null;
+        HuginnLog.Write($"meet {meeting}: {string.Join(", ", events.Select(e => e.Kind))}{(keep ? "" : " (not recording, dropped)")}");
+        if (keep) foreach (var e in events) _timeline!.AddEvent(e);
     }
-
-    private string? _meetLogged;
 
     // A Kumospace meeting starts recording (automatically or from the pop-up); the detector then owns its stop.
     private void StartForKumo(long now, string reason, KumoSnapshot? snap)

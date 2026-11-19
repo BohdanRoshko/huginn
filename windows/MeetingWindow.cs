@@ -35,7 +35,13 @@ internal sealed class MeetingWindow : Form
             Bounds = new System.Drawing.Rectangle(wa.Right - w - (int)(16 * k), wa.Top + (int)(16 * k), w, h);
         }
         FormClosing += (_, _) => SaveBounds();
-        try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { /* the default icon */ }
+        // Odin's icon with a lowercase "m" (meetings.ico, Bohdan 2026-11-20).
+        try
+        {
+            using var ico = Assembly.GetExecutingAssembly().GetManifestResourceStream("Huginn.meetings.ico");
+            if (ico != null) Icon = new System.Drawing.Icon(ico);
+        }
+        catch { /* the default icon */ }
         Controls.Add(_web);
         _ = InitAsync();
     }

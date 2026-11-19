@@ -253,7 +253,7 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         m.AddItem(Sub("Meeting Detection", CallsMenu()));
 
         m.AddItem(NSMenuItem.SeparatorItem);
-        m.AddItem(Item("Open Recordings Folder", () => { Directory.CreateDirectory(Paths.MeetingsDir()); MacUi.Open(Paths.MeetingsDir()); }));
+        m.AddItem(Item(_engine.RecordingsSizeText, () => { Directory.CreateDirectory(Paths.MeetingsDir()); MacUi.Open(Paths.MeetingsDir()); }));
         m.AddItem(Item("Open Log", () => MacUi.Open(Paths.LogPath())));
         m.AddItem(Sub("Notes", NotesMenu()));
         m.AddItem(Check("Show Recorder Panel", Settings.MeetingPanelVisible, TogglePanel));

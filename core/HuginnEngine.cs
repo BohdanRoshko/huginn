@@ -118,6 +118,29 @@ internal sealed class HuginnEngine : IAsyncDisposable
     public string PresenceTodayText { get; private set; } = "Kumospace today: nothing yet";
     public DateTime? MeetingStartedLocal => _current?.StartedLocal;
 
+    /// <summary>The menu line for the recordings folder: "Recordings: 3.2 GB" (audio, snapshots, transcripts).</summary>
+    public string RecordingsSizeText
+    {
+        get
+        {
+            long bytes = 0;
+            try
+            {
+                if (Directory.Exists(Paths.MeetingsDir()))
+                    foreach (var f in new DirectoryInfo(Paths.MeetingsDir()).EnumerateFiles("*", SearchOption.AllDirectories)) bytes += f.Length;
+            }
+            catch { /* a file vanished mid-count; the next open counts again */ }
+            return "Recordings: " + SizeText(bytes);
+        }
+    }
+
+    internal static string SizeText(long bytes) => bytes switch
+    {
+        < 1024L * 1024 => $"{bytes / 1024.0:0} KB",
+        < 1024L * 1024 * 1024 => $"{bytes / 1048576.0:0} MB",
+        _ => $"{bytes / 1073741824.0:0.0} GB",
+    };
+
     /// <summary>Starts the quit watcher, the Kumospace watcher and the first-run model download.</summary>
     public void Start()
     {

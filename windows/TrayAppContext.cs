@@ -30,6 +30,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
     private ToolStripMenuItem _sendMeetingsItem = null!;
     private ToolStripMenuItem _kumoStatusItem = null!;
     private ToolStripMenuItem _presenceItem = null!;
+    private ToolStripMenuItem _recordingsItem = null!;
     private ToolStripMenuItem _panelItem = null!;
     private ToolStripMenuItem _notesOffItem = null!, _notesAlwaysItem = null!, _notesRecordItem = null!;
     private ToolStripMenuItem _callAskItem = null!, _callAutoItem = null!, _callOffItem = null!;
@@ -144,6 +145,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _kumoStatusItem.Text = _engine.KumoStatusText;
         _kumoStatusItem.Enabled = _engine.KumoRestartAvailable;
         _presenceItem.Text = _engine.PresenceTodayText;
+        _recordingsItem.Text = _engine.RecordingsSizeText;
         _notesOffItem.Checked = _engine.NotesMode == "off";
         _notesAlwaysItem.Checked = _engine.NotesMode == "always";
         _notesRecordItem.Checked = _engine.NotesMode == "record";
@@ -230,6 +232,9 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         notesMenu.DropDownItems.AddRange(new ToolStripItem[] { _notesOffItem, _notesAlwaysItem, _notesRecordItem });
         menu.Items.Add(notesMenu);
         menu.Items.Add(new ToolStripSeparator());
+        _recordingsItem = new ToolStripMenuItem("Recordings", null, (_, _) => { Directory.CreateDirectory(Paths.MeetingsDir()); OpenPath(Paths.MeetingsDir()); })
+            { ToolTipText = "Open the recordings folder" };
+        menu.Items.Add(_recordingsItem);
         menu.Items.Add(new ToolStripMenuItem("Open log", null, (_, _) => OpenPath(Paths.LogPath())));
         menu.Items.Add(new ToolStripMenuItem("Quit", null, (_, _) => ExitApp()));
         menu.Opening += (_, _) => Refresh();

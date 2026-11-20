@@ -45,7 +45,7 @@ internal sealed class MacMeetingWindow
             TitlebarAppearsTransparent = true,
             BackgroundColor = MacUi.Rgb(25, 25, 25),
         };
-        _window.SetFrameAutosaveName("HuginnMeetingWindow"); // where it was last left, else the place above
+        _window.FrameAutosaveName = "HuginnMeetingWindow"; // where it was last left, else the place above
 
         _bridge = new Bridge(OnMessage);
         var config = new WKWebViewConfiguration();

@@ -28,7 +28,8 @@ internal static class UiProbe
         recent.SetStatus(a, "✓ internal-dev · 3 task(s)", JobTone.Good, cancelable: false);
         recent.SetTranscript(a, SampleTranscript("2026-11-18_093000"));
         var b = recent.Add("2026-11-18_120500", DateTime.Now.AddHours(-2));
-        recent.SetStatus(b, "Saved · Odin offline", JobTone.Warn, cancelable: false);
+        recent.SetTitle(b, "Vendor price check"); // the local name every recording gets, Odin or not
+        recent.SetStatus(b, "Saved", JobTone.Good, cancelable: false);
         recent.Add("2026-11-18_140000", DateTime.Now.AddMinutes(-20)); // still transcribing: shows the cancel button
 
         if (mode == "meeting")

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Huginn for Google Meet",
-  "version": "1.1.0",
-  "description": "Sends who is talking, raised hands, reactions and chat from a Google Meet call to the Huginn recorder on this computer.",
+  "version": "1.2.0",
+  "description": "Sends who is talking, raised hands, reactions, chat and snapshots of a shared screen from a Google Meet call to the Huginn recorder on this computer.",
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],

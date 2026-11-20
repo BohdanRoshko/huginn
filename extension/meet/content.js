@@ -1,5 +1,6 @@
-// Huginn for Google Meet: watches a Meet call for raised hands, reactions and chat, and hands each one to the
-// background worker, which passes it to Huginn. It reads the page only; it sends nothing to Google.
+// Huginn for Google Meet: watches a Meet call for who is talking, raised hands, reactions, chat and shared screens,
+// and hands each one to the background worker, which passes it to Huginn. It reads the page only; it sends nothing
+// to Google.
 // Meet's markup is not a public API, so every read below says what it relies on. When one stops matching, the
 // others still work, and the console shows "[huginn]" lines to tune it from.
 (() => {
@@ -58,6 +59,8 @@
       log(inCall ? "joined" : "left", meeting());
       if (!inCall) { hands.clear(); stopChat(); chatOpens = 0; }
       talkers.clear(); markStates.clear(); markSeenAt = 0; markMissingSince = 0; markMissingSaid = false;
+      if (!inCall) endShare(Date.now());
+      shareSaid.clear(); maybe = null; shareMissSince = 0; shareMissSaid = false; shotFailSaid = false;
     }
     if (inCall) {
       selfName = selfName || document.querySelector(SELF_NAME)?.textContent?.trim() || selfTileName() || accountName();
@@ -86,6 +89,7 @@
       if (isSelfTile(tile) || !onScreen(tile)) continue;
       const name = tileName(tile);
       if (!name || /^you$/i.test(name) || (selfName && name === selfName)) continue;
+      if (NAME_SAYS_SCREEN.test(name)) continue; // a shared screen's own tile: its sound is a video playing, not a person
       others++;
       const mark = tile.querySelector(TALK_MARK);
       if (!mark || !onScreen(mark)) continue; // muted: Meet shows a crossed microphone in place of the bars
@@ -117,6 +121,170 @@
   function note(text) {
     queue.push({ t: Date.now(), kind: "note", who: "", text });
     log("note", text);
+  }
+
+  // ---- shared screens: who starts and stops, and a snapshot each time the shared screen settles on something new.
+  //      A shared screen is a video like a camera, so four signs tell it apart, the surest first:
+  //        1. its tile's name says "presentation";
+  //        2. the picture is wider than any camera Meet sends (over 1280);
+  //        3. the page says someone is presenting, and the picture is not camera-shaped (16:9 or 4:3);
+  //        4. the page says someone is presenting, and this is clearly the largest video that is not my own camera.
+  //      Signs 3 and 4 can also fit a camera, so they count only once the picture has held dead still for two looks
+  //      in a row: a screen does that, a person on camera does not. Not yet seen on a live call (2026-11): the
+  //      "screen share" lines in Huginn's log say which sign matched, or which videos were on the page when none
+  //      did. The snapshot is as sharp as Meet shows the screen here. ----
+  const SHOT_EVERY_MS = 3000;
+  const SHOT_MAX_WIDTH = 1600;
+  const NAME_SAYS_SCREEN = /\s*\((?:presentation|presenting)\)\s*$|['’]s (?:presentation|screen)\s*$|\s+[-–—·]\s+presentation\s*$/i;
+  const PAGE_SAYS_PRESENTING = /\(presentation\)|['’]s presentation|\bis presenting\b|\byou(?:['’]re| are) presenting\b|\bstop presenting\b/i;
+  const PRESENTING_LABEL = '[aria-label*="is presenting" i], [aria-label*="stop presenting" i], [aria-label*="(presentation)" i]';
+  let share = null; // the screen being shared now: { who, unsure, lastGrid, keptGrid, seenAt }
+  let maybe = null; // a video found by sign 3 or 4, until it has held still: { video, grid, still }
+  const shareSaid = new Set(); // remarks already passed on in this call
+  let shareMissSince = 0, shareMissSaid = false, shotFailSaid = false, sending = false;
+
+  const cameraShaped = (v) => {
+    const r = v.videoWidth / v.videoHeight;
+    return [16 / 9, 4 / 3, 9 / 16, 3 / 4].some((c) => Math.abs(r - c) < 0.03);
+  };
+
+  function pageSaysPresenting() {
+    if (document.querySelector(PRESENTING_LABEL)) return true;
+    const text = document.body.innerText ?? document.body.textContent ?? "";
+    return PAGE_SAYS_PRESENTING.test(text);
+  }
+
+  // The shared screen's video, whose it is, and which sign found it; or the videos that were looked at.
+  function findScreen() {
+    const seen = [];
+    for (const v of document.querySelectorAll("video")) {
+      if (!v.videoWidth || v.videoWidth < 320 || !onScreen(v)) continue;
+      const tile = v.closest("[data-participant-id]");
+      const name = tile ? tileName(tile) : "";
+      const box = v.getBoundingClientRect();
+      seen.push({ v, name, self: !!tile && isSelfTile(tile), area: box.width * box.height,
+        named: NAME_SAYS_SCREEN.test(name) || /\bpresentation\b|\bpresenting\b/i.test(tile?.getAttribute("aria-label") || "") });
+    }
+    const largest = (list) => list.slice().sort((a, b) => b.area - a.area)[0] || null;
+    let hit = largest(seen.filter((s) => s.named)), sign = "the tile's name", unsure = false;
+    if (!hit) { hit = largest(seen.filter((s) => !s.self && s.v.videoWidth > 1280)); sign = "a picture wider than a camera's"; }
+    const says = hit ? true : pageSaysPresenting();
+    if (!hit && says) {
+      unsure = true;
+      hit = largest(seen.filter((s) => !s.self && !cameraShaped(s.v)));
+      sign = "the page says presenting, the picture is not camera-shaped and it holds still";
+    }
+    if (!hit && says) {
+      const others = seen.filter((s) => !s.self).sort((a, b) => b.area - a.area);
+      if (others.length > 0 && others[0].v.videoWidth >= 640 && (others.length === 1 || others[0].area >= 1.5 * others[1].area)) hit = others[0];
+      sign = "the page says presenting, this is the largest video and it holds still";
+    }
+    return { hit, sign, unsure, says, seen };
+  }
+
+  // The picture as a small grid of grey levels, to compare two looks; null while the video has no picture yet.
+  const GW = 96, GH = 54;
+  function look(video) {
+    const small = new OffscreenCanvas(GW, GH).getContext("2d", { willReadFrequently: true });
+    small.drawImage(video, 0, 0, GW, GH);
+    const px = small.getImageData(0, 0, GW, GH).data;
+    const grid = new Uint8Array(GW * GH);
+    let low = 255, high = 0;
+    for (let i = 0; i < grid.length; i++) {
+      const g = grid[i] = (px[i * 4] * 3 + px[i * 4 + 1] * 6 + px[i * 4 + 2]) / 10;
+      if (g < low) low = g;
+      if (g > high) high = g;
+    }
+    return high - low < 8 ? null : grid; // one flat colour is no picture
+  }
+  // The share of the grid that differs by more than `by` grey levels.
+  const moved = (a, b, by) => { if (!b) return 1; let n = 0; for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > by) n++; return n / a.length; };
+  const deadStill = (a, b) => moved(a, b, 12) <= 0.001; // a blinking cursor passes; a person who breathes does not
+
+  // Whose screen: the tile's name without "(Presentation)"; else the name in "… is presenting"; else nobody's.
+  function presenter(tileNameText) {
+    const plain = tileNameText.replace(NAME_SAYS_SCREEN, "").trim();
+    if (plain) return me(plain);
+    const text = document.body.innerText ?? "";
+    if (/\byou(?:['’]re| are) presenting\b/i.test(text)) return selfName || "Me";
+    const m = text.match(/^\s*(.{1,60}?) is presenting\b/m);
+    return m ? m[1].trim() : "";
+  }
+
+  function endShare(now) {
+    if (!share) return;
+    queue.push({ t: now, kind: "share-stop", who: share.who, text: "" });
+    log("share-stop", share.who);
+    share = null;
+  }
+
+  function watchShare() {
+    if (!inCall) return;
+    const now = Date.now();
+    const { hit, sign, unsure, says, seen } = findScreen();
+    const failed = (ex) => { if (!shotFailSaid) { shotFailSaid = true; note(`screen share: the picture could not be read (${ex && ex.message ? ex.message : ex})`); } };
+    let grid = null;
+    if (hit) { try { grid = look(hit.v); } catch (ex) { failed(ex); } }
+
+    // A video found by sign 3 or 4 is a shared screen only once it has held dead still for two looks in a row.
+    let held = null;
+    if (hit && grid && unsure && !share) {
+      const still = maybe && maybe.video === hit.v && deadStill(grid, maybe.grid);
+      held = still ? maybe.grid : null;
+      maybe = { video: hit.v, grid, still: still ? maybe.still + 1 : 0 };
+    }
+    const reading = !!hit && !!grid && (!!share || !unsure || maybe.still >= 2);
+
+    if (!reading) {
+      if (!hit) maybe = null;
+      else if (share) share.seenAt = now; // still there, with no picture for a moment
+      if (share && now - share.seenAt > 2 * SHOT_EVERY_MS) endShare(now); // Meet rebuilds the tile when the layout changes
+      if (!says || share) { shareMissSince = 0; return; }
+      shareMissSince = shareMissSince || now;
+      if (!shareMissSaid && now - shareMissSince > 30000) {
+        shareMissSaid = true;
+        const videos = seen.map((s) => `${s.v.videoWidth}x${s.v.videoHeight} "${s.name}"`).join(", ") || "none";
+        const why = hit && grid ? `the likeliest one, ${hit.v.videoWidth}x${hit.v.videoHeight} "${hit.name}", keeps moving` : "no video looks like a shared screen";
+        note(`screen share: the page says someone is presenting, but ${why} (videos: ${videos})`);
+      }
+      return;
+    }
+    shareMissSince = 0;
+    const who = presenter(hit.name) || (share ? share.who : ""); // a name once read stays while the share goes on
+    if (share && share.who !== who) endShare(now);
+    if (!share) {
+      share = { who, unsure, lastGrid: held, keptGrid: null, seenAt: now };
+      maybe = null;
+      queue.push({ t: now, kind: "share-start", who, text: "" });
+      log("share-start", who);
+    }
+    share.seenAt = now;
+    const said = `screen share: reading a ${hit.v.videoWidth}x${hit.v.videoHeight} video on the tile "${hit.name}" (sign: ${sign})`;
+    if (!shareSaid.has(said) && shareSaid.size < 8) { shareSaid.add(said); note(said); }
+
+    // A snapshot is kept when the picture is the same as 3 s ago (not mid-scroll or mid-animation) and differs from
+    // the last one kept.
+    const settled = share.unsure ? deadStill(grid, share.lastGrid) : moved(grid, share.lastGrid, 20) < 0.005;
+    share.lastGrid = grid;
+    if (!settled || moved(grid, share.keptGrid, 20) < 0.01 || sending) return;
+    share.keptGrid = grid;
+    sending = true;
+    send(share.who, hit.v).catch(failed).finally(() => { sending = false; });
+  }
+  setInterval(watchShare, SHOT_EVERY_MS);
+
+  // The picture as a JPEG, at most SHOT_MAX_WIDTH across, handed to the background worker for Huginn.
+  async function send(who, video) {
+    const scale = Math.min(1, SHOT_MAX_WIDTH / video.videoWidth);
+    const w = Math.round(video.videoWidth * scale), h = Math.round(video.videoHeight * scale);
+    const big = new OffscreenCanvas(w, h);
+    big.getContext("2d").drawImage(video, 0, 0, w, h);
+    const blob = await big.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+    const jpeg = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => res(""); r.readAsDataURL(blob); });
+    if (!jpeg) return;
+    log("shot", who, `${w}x${h}`);
+    try { chrome.runtime.sendMessage({ type: "huginn-shot", meeting: meeting(), t: Date.now(), who, jpeg }); }
+    catch { /* the extension was reloaded; this page keeps the old script until a reload */ }
   }
 
   // ---- raised hands: mine from the hand button ("Lower hand" while it is up), others' from the "front_hand" icon on

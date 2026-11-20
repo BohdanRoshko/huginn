@@ -74,6 +74,27 @@ internal sealed class SpeakerTimeline
 
     private int _shots;
 
+    /// <summary>Saves one snapshot of a shared screen under <paramref name="stamp"/> and notes it for the transcript.
+    /// Returns the snapshot's name (<c>shot-001.jpg</c>), or null when it was from before the recording or not saved.</summary>
+    public string? AddShot(KumoShot shot, string stamp)
+    {
+        long off = shot.T - StartUnixMs;
+        if (off < 0 || _shots >= 500) return null;
+        var name = $"shot-{++_shots:D3}.jpg";
+        try
+        {
+            Directory.CreateDirectory(Paths.MeetingsDir());
+            File.WriteAllBytes(ShotPath(stamp, name), shot.Jpeg);
+            Events.Add(new object[] { off, "shot", shot.Who, name });
+            return name;
+        }
+        catch (Exception ex)
+        {
+            HuginnLog.Write($"meeting {stamp}: snapshot not saved", ex);
+            return null;
+        }
+    }
+
     public static SpeakerTimeline Begin(DateTime startedLocal) =>
         new() { StartUnixMs = new DateTimeOffset(startedLocal).ToUnixTimeMilliseconds() };
 
@@ -86,18 +107,7 @@ internal sealed class SpeakerTimeline
             long off = e.T - StartUnixMs;
             if (off >= -2000) Events.Add(new object[] { Math.Max(0, off), e.Kind, e.Who, e.Text });
         }
-        foreach (var shot in snap.Shots ?? Array.Empty<KumoShot>())
-        {
-            long off = shot.T - StartUnixMs;
-            if (off < 0 || _shots >= 500) continue;
-            var name = $"shot-{++_shots:D3}.jpg";
-            try
-            {
-                File.WriteAllBytes(ShotPath(stamp, name), shot.Jpeg);
-                Events.Add(new object[] { off, "shot", shot.Who, name });
-            }
-            catch (Exception ex) { HuginnLog.Write($"meeting {stamp}: snapshot not saved", ex); }
-        }
+        foreach (var shot in snap.Shots ?? Array.Empty<KumoShot>()) AddShot(shot, stamp);
         if (!string.IsNullOrEmpty(snap.Me?.Name)) Me = snap.Me!.Name;
         if (snap.Zone.Length > 0 && !Rooms.Contains(snap.Zone)) Rooms.Add(snap.Zone);
         foreach (var p in snap.Company)

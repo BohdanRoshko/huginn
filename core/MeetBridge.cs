@@ -6,10 +6,11 @@ using System.Text.Json;
 namespace Huginn;
 
 /// <summary>
-/// Takes what the Huginn browser extension sees in a Google Meet call (who is talking, hands, reactions, chat) over a tiny HTTP
-/// listener on 127.0.0.1. The extension's background worker POSTs <c>/meet/events</c> with the header
-/// <c>X-Huginn: 1</c>; a web page cannot send that header to another origin without a CORS preflight, and this
-/// listener never answers one, so no page can write into a transcript. Nothing else is served.
+/// Takes what the Huginn browser extension sees in a Google Meet call (who is talking, hands, reactions, chat,
+/// snapshots of a shared screen) over a tiny HTTP listener on 127.0.0.1. The extension's background worker POSTs
+/// <c>/meet/events</c> or <c>/meet/shot</c> with the header <c>X-Huginn: 1</c>; a web page cannot send that header to
+/// another origin without a CORS preflight, and this listener never answers one, so no page can write into a
+/// transcript. Nothing else is served.
 /// </summary>
 internal sealed class MeetBridge : IDisposable
 {
@@ -21,6 +22,9 @@ internal sealed class MeetBridge : IDisposable
 
     /// <summary>Raised on the listener's thread with each batch: the meeting code and its events.</summary>
     public event Action<string, IReadOnlyList<KumoEvent>>? Events;
+
+    /// <summary>Raised on the listener's thread with each snapshot of a shared screen: the meeting code and the JPEG.</summary>
+    public event Action<string, KumoShot>? Shot;
 
     public void Start()
     {
@@ -77,9 +81,16 @@ internal sealed class MeetBridge : IDisposable
 
     internal int Handle(Request r)
     {
-        if (r.Method != "POST" || r.Path != "/meet/events") return 404;
+        if (r.Method != "POST" || r.Path is not ("/meet/events" or "/meet/shot")) return 404;
         if (!r.Headers.TryGetValue("x-huginn", out var h) || h != "1") return 403;
         if (r.Headers.TryGetValue("origin", out var origin) && !origin.StartsWith("chrome-extension://", StringComparison.Ordinal)) return 403;
+        if (r.Path == "/meet/shot")
+        {
+            var (code, shot) = ParseShot(r.Body);
+            if (shot == null) return 400;
+            Shot?.Invoke(code, shot);
+            return 204;
+        }
         var (meeting, events) = Parse(r.Body);
         if (events.Count > 0) Events?.Invoke(meeting, events);
         return 204;
@@ -110,12 +121,28 @@ internal sealed class MeetBridge : IDisposable
         return (meeting, list);
     }
 
+    /// <summary>One snapshot: <c>{"meeting":"abc-defg-hij","t":1732000000000,"who":"Ana","jpeg":"…base64…"}</c>.
+    /// Null when the picture is not a JPEG.</summary>
+    internal static (string Meeting, KumoShot? Shot) ParseShot(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("t", out var t) || !t.TryGetInt64(out var ms)) return ("", null);
+            var jpeg = Convert.FromBase64String(Str(root, "jpeg"));
+            if (jpeg.Length < 100 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 || jpeg[2] != 0xFF) return ("", null);
+            return (Str(root, "meeting"), new KumoShot(ms, Clip(Str(root, "who"), 120).Trim(), jpeg));
+        }
+        catch (Exception ex) when (ex is JsonException or FormatException) { return ("", null); }
+    }
+
     private static string Str(JsonElement e, string p) =>
         e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
     private static string Clip(string s, int max) => s.Length <= max ? s : s[..max];
 
-    private const int MaxBody = 256 * 1024;
+    private const int MaxBody = 3 * 1024 * 1024; // a snapshot is a JPEG of at most 1600 px across, sent as base64
 
     internal static async Task<Request?> ReadRequestAsync(Stream stream, CancellationToken ct)
     {

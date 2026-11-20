@@ -82,6 +82,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         };
         _kumo.Snapshot += snap => _kumoReads.Enqueue(snap);
         _meet.Events += (meeting, events) => Ui(() => OnMeetEvents(meeting, events));
+        _meet.Shot += (meeting, shot) => Ui(() => OnMeetShot(meeting, shot));
         _kumo.StatusChanged += st => Ui(() => OnKumoStatus(st));
 
         _p.Meeting.LevelChanged += _p.Recorder.SetLevel;
@@ -1099,6 +1100,20 @@ internal sealed class HuginnEngine : IAsyncDisposable
         if (rest.Count == 0) return;
         HuginnLog.Write($"meet {meeting}: {string.Join(", ", rest.Select(e => e.Kind))}{(keep ? "" : " (not recording, dropped)")}");
         if (keep) foreach (var e in rest) _timeline!.AddEvent(e);
+    }
+
+    // A snapshot of a screen shared in a Google Meet call (the browser extension). Kept only while recording, and
+    // not in a Kumospace recording, which takes its own.
+    private void OnMeetShot(string meeting, KumoShot shot)
+    {
+        var whose = shot.Who.Length > 0 ? $"{shot.Who}'s screen" : "the shared screen";
+        if (!_p.Meeting.IsRecording || _timeline == null || _current is not { } cur || _source == KumoSource)
+        {
+            HuginnLog.Write($"meet {meeting}: snapshot of {whose} (not recording, dropped)");
+            return;
+        }
+        var name = _timeline.AddShot(shot, cur.Stamp);
+        if (name != null) HuginnLog.Write($"meet {meeting}: snapshot of {whose} saved as {name} ({shot.Jpeg.Length / 1024} KB)");
     }
 
     // A Kumospace meeting starts recording (automatically or from the pop-up); the detector then owns its stop.

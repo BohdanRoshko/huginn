@@ -71,7 +71,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private readonly System.Windows.Forms.Timer _tick = new() { Interval = 55 };
     private readonly Font _titleFont = new("Segoe UI Semibold", 10.5f);
     private readonly Font _subFont = new("Segoe UI", 9f);
-    private readonly Font _pillFont = new("Segoe UI Semibold", 9.5f);
+    private readonly Font _pillFont = new("Segoe UI Semibold", 9f);
     private readonly Font _footFont = new("Segoe UI", 8f);
     private readonly Font _rowNameFont = new("Segoe UI Semibold", 9f);
     private readonly Font _rowMetaFont = new("Segoe UI", 8f);
@@ -96,10 +96,10 @@ internal sealed class MeetingPanel : Form, IRecorderView
     private static readonly Color Skeleton = Color.FromArgb(22, 255, 255, 255); // muted placeholder bar on the list surface
 
     private const int BaseH = 112;
-    private const int MeterCy = 58;   // mic-level meter center: the band between the header and the list
+    private const int MeterCy = 53;   // mic-level meter center: the band between the header and the list
     private const int MeterMaxH = 22; // bar height at full level: room above and below inside the 32 px well
-    private const int JobsDividerY = 77;
-    private const int JobsTop = 77;
+    private const int JobsDividerY = 72;
+    private const int JobsTop = 72;
     private const int RowH = 41;       // 6 px between a row's text and the line above it, and 6 px to the line below (Bohdan, 2026-11-20)
     private const int BottomPad = 2;   // with the row's own 6 px, 8 px under the last row: the same as above the header
 
@@ -128,13 +128,14 @@ internal sealed class MeetingPanel : Form, IRecorderView
     }
 
     // ---- layout ----
-    private Rectangle IconTile => new(15, 10, 22, 22);
+    // The header: Huginn's tile and the Record pill, both 24 px tall on the same line (Bohdan, 2026-11-20).
+    private Rectangle IconTile => new(14, 8, 24, 24);
     private Rectangle Pill => _recording
-        ? new Rectangle(Width - 14 - 80, 8, 80, 28)
-        : new Rectangle(Width - 14 - 96, 8, 96, 28);
+        ? new Rectangle(Width - 14 - 72, 8, 72, 24)
+        : new Rectangle(Width - 14 - 88, 8, 88, 24);
     /// <summary>The discard (trash) button — only while recording; sits left of the Stop pill. Icon-sized so
     /// it never collides with the elapsed-time header text.</summary>
-    private Rectangle TrashRect => new(Width - 14 - 80 - 8 - 28, 8, 28, 28);
+    private Rectangle TrashRect => new(Width - 14 - 72 - 8 - 24, 8, 24, 24);
 
     // ---- public API ----
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } Raise(); });
@@ -235,12 +236,13 @@ internal sealed class MeetingPanel : Form, IRecorderView
         // Huginn's tile, the same one the meeting pop-up shows: white, with the waveform in ink.
         using (var tile = new SolidBrush(Color.FromArgb(236, 236, 236)))
         using (var tp = Rounded(IconTile, 6)) g.FillPath(tile, tp);
-        float[] bars = { 5, 10, 15, 9, 12, 6 };
+        float[] bars = { 5.5f, 11, 16, 10, 13, 6.5f };
+        float barsX = IconTile.X + (IconTile.Width - (5 * 2.8f + 1.7f)) / 2f; // the waveform centred in the tile
         using (var ink = new SolidBrush(Color.FromArgb(28, 28, 28)))
             for (int i = 0; i < bars.Length; i++)
             {
-                float bx = IconTile.X + 4.2f + i * 2.55f, bh = bars[i];
-                using var bar = Rounded(new RectangleF(bx, IconTile.Y + (IconTile.Height - bh) / 2f, 1.6f, bh), 0.8f);
+                float bx = barsX + i * 2.8f, bh = bars[i];
+                using var bar = Rounded(new RectangleF(bx, IconTile.Y + (IconTile.Height - bh) / 2f, 1.7f, bh), 0.85f);
                 g.FillPath(ink, bar);
             }
         if (_recording)
@@ -253,7 +255,8 @@ internal sealed class MeetingPanel : Form, IRecorderView
         }
 
         if (_recording)
-            TextRenderer.DrawText(g, $"REC  {Elapsed()}", _titleFont, new Point(46, 11), Red, TextFormatFlags.NoPrefix);
+            TextRenderer.DrawText(g, $"REC  {Elapsed()}", _titleFont, new Rectangle(IconTile.Right + 10, IconTile.Y, 200, IconTile.Height), Red,
+                TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
 
         DrawActionPill(g, Pill, _recording);
         if (_recording) DrawTrash(g, TrashRect, _discardHover, _discardArmed);
@@ -302,7 +305,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         }
 
         string text = isStop ? "Stop" : "Record";
-        const int glyph = 9, gap = 7;
+        const int glyph = 8, gap = 6;
         int tw = TextRenderer.MeasureText(g, text, _pillFont, Size.Empty, TextFormatFlags.NoPadding).Width;
         int total = glyph + gap + tw;
         int sx = rect.X + (rect.Width - total) / 2;

@@ -109,9 +109,24 @@ internal static class MeetingProcessor
                 .Select(k => (toMeeting(k.start), toMeeting(themEnds.GetValueOrDefault((k.start, k.text), k.start)))).ToList();
             text = NameSpeakers(text, spans, timeline!, stamp);
         }
+        else text = NameMe(text, Settings.UserName);
         if (timeline != null && timeline.Events.Count > 0) text = AddEvents(text, timeline.Events);
         var echo = new EchoReport(me.Count, verdict.Silent, verdict.Unheard, verdict.Echo + theirWords, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagEndMs, verdict.Matched, verdict.Pieces);
         return (text, rawText, echo, kept.Count - reconciled.RemovedEchoes);
+    }
+
+    /// <summary>Says whose microphone "Me" is, on a transcript with no names from Kumospace (Meet, Zoom, a recording
+    /// started by hand): the name set under "Your name…". The header line has the shape the Kumospace one has, so a
+    /// reader that shows a name on the "Me" lines needs one rule. No name set: the text is left as it is.</summary>
+    internal static string NameMe(string text, string name)
+    {
+        name = name.Replace(".", " ").Trim();
+        if (name.Length == 0) return text;
+        var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
+        int at = lines.FindIndex(l => l.StartsWith("# Tracks:"));
+        if (at < 0) return text;
+        lines.Insert(at + 1, $"# Speakers: Me = {name}. \"Them\" = everyone else in the call; this app does not tell them apart.");
+        return string.Join("\n", lines);
     }
 
     private const string SureMe = "Me+";
@@ -266,7 +281,7 @@ internal static class MeetingProcessor
             var where = tl.Rooms.Count > 0 ? string.Join(", ", tl.Rooms) : "outside a room";
             var people = tl.People.Count > 0 ? string.Join(", ", tl.People) : "nobody recorded";
             lines[i] = $"# Kumospace: {where} · with {people}\n"
-                     + $"# Speakers: Me = {tl.Me ?? "the microphone"}. A named line is the person Kumospace heard talking then. \"Them\" = no clear speaker.";
+                     + $"# Speakers: Me = {tl.Me ?? (Settings.UserName.Length > 0 ? Settings.UserName.Replace(".", " ").Trim() : "the microphone")}. A named line is the person Kumospace heard talking then. \"Them\" = no clear speaker.";
             break;
         }
         return string.Join("\n", lines);

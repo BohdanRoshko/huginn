@@ -158,6 +158,23 @@ public class TrackTimeTests
     }
 
     [Fact]
+    public void ATranscriptWithoutKumospaceSaysWhoseMicrophoneMeIs()
+    {
+        const string text =
+            "# Meeting transcript — 2026-11-18 10:00\n" +
+            "# Source: Google Meet\n" +
+            "# Tracks: Me (microphone) · Them (system audio — all remote participants, mixed)\n" +
+            "\n" +
+            "[00:00:01] Them: Morning.\n" +
+            "[00:00:03] Me: Hi.\n";
+        var named = MeetingProcessor.NameMe(text, "Robin Hale");
+        Assert.Contains("# Tracks: Me (microphone)", named);
+        Assert.Contains("\n# Speakers: Me = Robin Hale. ", named);
+        Assert.Contains("[00:00:03] Me: Hi.", named);
+        Assert.Equal(text, MeetingProcessor.NameMe(text, ""));
+    }
+
+    [Fact]
     public void WithoutMyLevelKumospaceCannotTell()
     {
         var (tl, _) = TwoSpeakers();

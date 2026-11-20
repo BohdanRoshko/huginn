@@ -24,10 +24,11 @@ public class MeetShotTests
     public void TheBridgeTakesASnapshot()
     {
         var bridge = new MeetBridge(0);
-        (string Meeting, KumoShot Shot)? got = null;
-        bridge.Shot += (m, s) => got = (m, s);
+        (MeetBridge.BrowserCall Call, KumoShot Shot)? got = null;
+        bridge.Shot += (c, s) => got = (c, s);
         Assert.Equal(204, bridge.Handle(Req(Body(Jpeg))));
-        Assert.Equal("abc-defg-hij", got!.Value.Meeting);
+        Assert.Equal(new MeetBridge.BrowserCall("Google Meet", "abc-defg-hij"), got!.Value.Call); // no "app": the Meet-only extension
+        Assert.Equal("meet abc-defg-hij", got.Value.Call.Tag);
         Assert.Equal(1700, got.Value.Shot.T);
         Assert.Equal("Alex Moore", got.Value.Shot.Who);
         Assert.Equal(Jpeg, got.Value.Shot.Jpeg);

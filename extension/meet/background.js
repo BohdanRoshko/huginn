@@ -14,7 +14,7 @@ function post(path, body) {
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg) return;
   if (msg.type === "huginn-events" && Array.isArray(msg.events) && msg.events.length > 0)
-    post("events", { meeting: msg.meeting || "", events: msg.events });
+    post("events", { app: msg.app || "", meeting: msg.meeting || "", events: msg.events });
   else if (msg.type === "huginn-shot" && typeof msg.jpeg === "string" && msg.jpeg.length > 0)
-    post("shot", { meeting: msg.meeting || "", t: msg.t, who: msg.who || "", jpeg: msg.jpeg });
+    post("shot", { app: msg.app || "", meeting: msg.meeting || "", t: msg.t, who: msg.who || "", jpeg: msg.jpeg });
 });

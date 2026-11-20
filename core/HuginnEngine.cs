@@ -1076,11 +1076,13 @@ internal sealed class HuginnEngine : IAsyncDisposable
 
     private const string KumoSource = "Kumospace";
 
-    // Who is talking, hands, reactions and chat from a Google Meet call (the browser extension). Kept only while recording.
-    private void OnMeetEvents(string meeting, IReadOnlyList<KumoEvent> events)
+    // Who is talking, hands, reactions and chat from a call in the browser (the extension: Google Meet and the other
+    // sites it reads). Kept only while recording.
+    private void OnMeetEvents(MeetBridge.BrowserCall call, IReadOnlyList<KumoEvent> events)
     {
+        var meeting = call.Tag;
         bool keep = _p.Meeting.IsRecording && _timeline != null;
-        foreach (var note in events.Where(e => e.Kind == "note")) HuginnLog.Write($"meet {meeting}: {note.Text}");
+        foreach (var note in events.Where(e => e.Kind == "note")) HuginnLog.Write($"{meeting}: {note.Text}");
 
         // Talk samples name the lines. They come five a second, so the log gets one line per person, not one per sample.
         // A Kumospace recording has Kumospace's own levels; a Meet tab open beside it must not name its lines.
@@ -1092,28 +1094,28 @@ internal sealed class HuginnEngine : IAsyncDisposable
         if (talk.Count > 0 && keep && _source != KumoSource)
             foreach (var e in talk)
             {
-                if (!_timeline!.People.Contains(e.Who.Trim())) HuginnLog.Write($"meet {meeting}: {e.Who.Trim()} is talking (the first time in this recording)");
-                _timeline.AddTalk(_source ?? "Google Meet", e.Who, e.T);
+                if (!_timeline!.People.Contains(e.Who.Trim())) HuginnLog.Write($"{meeting}: {e.Who.Trim()} is talking (the first time in this recording)");
+                _timeline.AddTalk(call.App, e.Who, e.T); // the app whose page showed the person talking
             }
 
         var rest = events.Where(e => e.Kind is not ("talk" or "note")).ToList();
         if (rest.Count == 0) return;
-        HuginnLog.Write($"meet {meeting}: {string.Join(", ", rest.Select(e => e.Kind))}{(keep ? "" : " (not recording, dropped)")}");
+        HuginnLog.Write($"{meeting}: {string.Join(", ", rest.Select(e => e.Kind))}{(keep ? "" : " (not recording, dropped)")}");
         if (keep) foreach (var e in rest) _timeline!.AddEvent(e);
     }
 
-    // A snapshot of a screen shared in a Google Meet call (the browser extension). Kept only while recording, and
-    // not in a Kumospace recording, which takes its own.
-    private void OnMeetShot(string meeting, KumoShot shot)
+    // A snapshot of a screen shared in a call in the browser (the extension). Kept only while recording, and not in
+    // a Kumospace recording, which takes its own.
+    private void OnMeetShot(MeetBridge.BrowserCall call, KumoShot shot)
     {
         var whose = shot.Who.Length > 0 ? $"{shot.Who}'s screen" : "the shared screen";
         if (!_p.Meeting.IsRecording || _timeline == null || _current is not { } cur || _source == KumoSource)
         {
-            HuginnLog.Write($"meet {meeting}: snapshot of {whose} (not recording, dropped)");
+            HuginnLog.Write($"{call.Tag}: snapshot of {whose} (not recording, dropped)");
             return;
         }
         var name = _timeline.AddShot(shot, cur.Stamp);
-        if (name != null) HuginnLog.Write($"meet {meeting}: snapshot of {whose} saved as {name} ({shot.Jpeg.Length / 1024} KB)");
+        if (name != null) HuginnLog.Write($"{call.Tag}: snapshot of {whose} saved as {name} ({shot.Jpeg.Length / 1024} KB)");
     }
 
     // A Kumospace meeting starts recording (automatically or from the pop-up); the detector then owns its stop.

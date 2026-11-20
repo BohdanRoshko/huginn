@@ -14,17 +14,24 @@ namespace Huginn;
 /// </summary>
 internal sealed class MeetBridge : IDisposable
 {
+    /// <summary>The call a request came from: the meeting app's name ("Google Meet", "Microsoft Teams") and the
+    /// call's own short name on that site. <see cref="Tag"/> starts its log lines.</summary>
+    internal sealed record BrowserCall(string App, string Meeting)
+    {
+        public string Tag => App == "Google Meet" ? $"meet {Meeting}" : $"{App} {Meeting}".Trim();
+    }
+
     private readonly int _port;
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
 
     public MeetBridge(int port) { _port = port; }
 
-    /// <summary>Raised on the listener's thread with each batch: the meeting code and its events.</summary>
-    public event Action<string, IReadOnlyList<KumoEvent>>? Events;
+    /// <summary>Raised on the listener's thread with each batch: the call it came from and its events.</summary>
+    public event Action<BrowserCall, IReadOnlyList<KumoEvent>>? Events;
 
-    /// <summary>Raised on the listener's thread with each snapshot of a shared screen: the meeting code and the JPEG.</summary>
-    public event Action<string, KumoShot>? Shot;
+    /// <summary>Raised on the listener's thread with each snapshot of a shared screen: the call and the JPEG.</summary>
+    public event Action<BrowserCall, KumoShot>? Shot;
 
     public void Start()
     {
@@ -86,26 +93,33 @@ internal sealed class MeetBridge : IDisposable
         if (r.Headers.TryGetValue("origin", out var origin) && !origin.StartsWith("chrome-extension://", StringComparison.Ordinal)) return 403;
         if (r.Path == "/meet/shot")
         {
-            var (code, shot) = ParseShot(r.Body);
+            var (from, shot) = ParseShot(r.Body);
             if (shot == null) return 400;
-            Shot?.Invoke(code, shot);
+            Shot?.Invoke(from, shot);
             return 204;
         }
-        var (meeting, events) = Parse(r.Body);
-        if (events.Count > 0) Events?.Invoke(meeting, events);
+        var (call, events) = Parse(r.Body);
+        if (events.Count > 0) Events?.Invoke(call, events);
         return 204;
     }
 
-    /// <summary>The body: <c>{"meeting":"abc-defg-hij","events":[{"t":1732000000000,"kind":"react","who":"Ana","text":"👍"}]}</c>.</summary>
-    internal static (string Meeting, List<KumoEvent> Events) Parse(string body)
+    // The app and the call a request came from. A request without "app" is from the Meet-only extension.
+    private static BrowserCall CallOf(JsonElement root)
+    {
+        var app = Clip(Str(root, "app"), 40).Trim();
+        return new BrowserCall(app.Length > 0 ? app : "Google Meet", Clip(Str(root, "meeting"), 120).Trim());
+    }
+
+    /// <summary>The body: <c>{"app":"Google Meet","meeting":"abc-defg-hij","events":[{"t":1732000000000,"kind":"react","who":"Ana","text":"👍"}]}</c>.</summary>
+    internal static (BrowserCall Call, List<KumoEvent> Events) Parse(string body)
     {
         var list = new List<KumoEvent>();
-        string meeting = "";
+        var call = new BrowserCall("Google Meet", "");
         try
         {
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
-            if (root.TryGetProperty("meeting", out var m) && m.ValueKind == JsonValueKind.String) meeting = m.GetString() ?? "";
+            if (root.ValueKind == JsonValueKind.Object) call = CallOf(root);
             if (root.TryGetProperty("events", out var evs) && evs.ValueKind == JsonValueKind.Array)
                 foreach (var e in evs.EnumerateArray())
                 {
@@ -118,23 +132,24 @@ internal sealed class MeetBridge : IDisposable
                 }
         }
         catch (JsonException) { /* a broken batch is dropped */ }
-        return (meeting, list);
+        return (call, list);
     }
 
-    /// <summary>One snapshot: <c>{"meeting":"abc-defg-hij","t":1732000000000,"who":"Ana","jpeg":"…base64…"}</c>.
+    /// <summary>One snapshot: <c>{"app":"Google Meet","meeting":"abc-defg-hij","t":1732000000000,"who":"Ana","jpeg":"…base64…"}</c>.
     /// Null when the picture is not a JPEG.</summary>
-    internal static (string Meeting, KumoShot? Shot) ParseShot(string body)
+    internal static (BrowserCall Call, KumoShot? Shot) ParseShot(string body)
     {
+        var none = new BrowserCall("Google Meet", "");
         try
         {
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("t", out var t) || !t.TryGetInt64(out var ms)) return ("", null);
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("t", out var t) || !t.TryGetInt64(out var ms)) return (none, null);
             var jpeg = Convert.FromBase64String(Str(root, "jpeg"));
-            if (jpeg.Length < 100 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 || jpeg[2] != 0xFF) return ("", null);
-            return (Str(root, "meeting"), new KumoShot(ms, Clip(Str(root, "who"), 120).Trim(), jpeg));
+            if (jpeg.Length < 100 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 || jpeg[2] != 0xFF) return (none, null);
+            return (CallOf(root), new KumoShot(ms, Clip(Str(root, "who"), 120).Trim(), jpeg));
         }
-        catch (Exception ex) when (ex is JsonException or FormatException) { return ("", null); }
+        catch (Exception ex) when (ex is JsonException or FormatException) { return (none, null); }
     }
 
     private static string Str(JsonElement e, string p) =>

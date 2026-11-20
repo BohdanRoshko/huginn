@@ -26,6 +26,17 @@ public class MeetTalkTests
         Assert.Equal("Alex Moore", got![0].Who);
     }
 
+    [Fact]
+    public void ABatchSaysWhichAppItsPageIs()
+    {
+        var bridge = new MeetBridge(0);
+        MeetBridge.BrowserCall? from = null;
+        bridge.Events += (c, _) => from = c;
+        bridge.Handle(Req("""{"app":"Microsoft Teams","meeting":"weekly","events":[{"t":1000,"kind":"talk","who":"Alex Moore","text":""}]}"""));
+        Assert.Equal(new MeetBridge.BrowserCall("Microsoft Teams", "weekly"), from);
+        Assert.Equal("Microsoft Teams weekly", from!.Tag);
+    }
+
     // Alex talks from 2 s to 14 s, Sam from 16 s to 28 s, in bursts; samples every 200 ms as the extension sends them.
     private static (SpeakerTimeline Timeline, float[] Loop) Call()
     {

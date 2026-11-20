@@ -18,9 +18,6 @@ namespace Huginn;
 /// typed since (an agenda) carry [00:00:00] and join the recording. After Stop the pad keeps the notes while
 /// the status line follows the job (Transcribing… → Filing to Odin… → the result); once the transcript
 /// exists, <b>Open transcript</b> / <b>Copy path</b> appear in the footer until the next recording starts.
-///
-/// It looks like the recorder (2026-11-20): Windows rounds it and draws its shadow, the header is a 24 px tile and a
-/// 24 px Record pill, the job's status sits in the header, and the pad is a darker inset well, like the level meter.
 /// </summary>
 internal sealed class NotesPanel : Form, INotesView
 {
@@ -59,16 +56,15 @@ internal sealed class NotesPanel : Form, INotesView
     private readonly System.Windows.Forms.Timer _save = new() { Interval = 400 };
     private readonly Font _titleFont = new("Segoe UI Semibold", 10.5f);
     private readonly Font _subFont = new("Segoe UI", 9f);
-    private readonly Font _pillFont = new("Segoe UI Semibold", 9f);
+    private readonly Font _pillFont = new("Segoe UI Semibold", 9.5f);
     private readonly Font _hintFont = new("Segoe UI", 8f);
     private readonly Font _padFont = new("Segoe UI", 10f);
     private readonly Font _footFont = new("Segoe UI Semibold", 8.5f);
 
     // Same palette as MeetingPanel, so the two windows read as one pair.
     private static readonly Color Bg = Color.FromArgb(32, 32, 33);
-    private static readonly Color Well = Color.FromArgb(24, 24, 25);
-    private static readonly Color WellEdge = Color.FromArgb(10, 255, 255, 255);
     private static readonly Color Border = Color.FromArgb(20, 255, 255, 255);
+    private static readonly Color Divider = Color.FromArgb(16, 255, 255, 255);
     private static readonly Color TitleCol = Color.FromArgb(234, 234, 236);
     private static readonly Color Muted = Color.FromArgb(140, 140, 144);
     private static readonly Color VMuted = Color.FromArgb(104, 104, 108);
@@ -76,13 +72,15 @@ internal sealed class NotesPanel : Form, INotesView
     private static readonly Color RedHover = Color.FromArgb(236, 92, 96);
     private static readonly Color Green = Color.FromArgb(122, 196, 143);
 
-    // Exactly the recorder's size (its JobsTop + DisplayMax rows + BottomPad).
+    // Exactly the recorder's idle size (its JobsTop + DisplayMax rows + BottomPad).
     private const int W = 352, H = 402;
-    private const int WellTop = 37;      // the pad's well starts where the recorder's meter well does
-    private const int FooterH = 24;
-    private int FooterY => H - 8 - FooterH;
-    private int WellBottom => _hasTranscript ? FooterY - 8 : H - 8;
-    private Rectangle WellRect => new(14, WellTop, W - 28, WellBottom - WellTop);
+    private const int HeaderDivY = 48;
+    private const int HintY = 54;
+    private const int PadTop = 72;
+    private const int PadBottomPad = 14;
+    private const int FooterH = 26;
+    private int FooterY => H - PadBottomPad - FooterH;
+    private int PadBottom => _hasTranscript ? FooterY - 8 : H - PadBottomPad;
 
     public NotesPanel()
     {
@@ -99,7 +97,7 @@ internal sealed class NotesPanel : Form, INotesView
             WordWrap = true,
             ScrollBars = ScrollBars.None,      // the caret scrolls the text; a bar would break the card look
             BorderStyle = BorderStyle.None,
-            BackColor = Well,
+            BackColor = Bg,
             ForeColor = TitleCol,
             Font = _padFont,
             AcceptsTab = false,
@@ -121,41 +119,16 @@ internal sealed class NotesPanel : Form, INotesView
     protected override bool ShowWithoutActivation => true;
 
     // ---- layout (the recorder's header geometry) ----
-    private Rectangle IconTile => new(14, 8, 24, 24);
+    private Rectangle IconTile => new(15, 13, 22, 22);
     private Rectangle Pill => _recording
-        ? new Rectangle(Width - 14 - 72, 8, 72, 24)
-        : new Rectangle(Width - 14 - 88, 8, 88, 24);
-    private Rectangle TrashRect => new(Width - 14 - 72 - 8 - 24, 8, 24, 24);
-    private Rectangle OpenRect => new(14, FooterY, 118, FooterH);
-    private Rectangle CopyRect => new(14 + 118 + 8, FooterY, 88, FooterH);
+        ? new Rectangle(Width - 14 - 80, 11, 80, 28)
+        : new Rectangle(Width - 14 - 96, 11, 96, 28);
+    private Rectangle TrashRect => new(Width - 14 - 80 - 8 - 28, 11, 28, 28);
+    private Rectangle OpenRect => new(16, FooterY, 118, FooterH);
+    private Rectangle CopyRect => new(16 + 118 + 8, FooterY, 88, FooterH);
     private bool ActionsShown => !_hideActions;
 
-    private void LayoutPad() => _pad.SetBounds(WellRect.X + 10, WellRect.Y + 8, WellRect.Width - 20, WellRect.Height - 16);
-
-    // Windows 11 rounds the window and draws its shadow, as for the recorder; elsewhere a region cuts the corners.
-    private bool _dwmRounded;
-
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            var cp = base.CreateParams;
-            cp.ClassStyle |= 0x00020000; // CS_DROPSHADOW
-            return cp;
-        }
-    }
-
-    protected override void OnHandleCreated(EventArgs e)
-    {
-        base.OnHandleCreated(e);
-        int round = 2, border = 0x00303032; // DWMWCP_ROUND; a quiet edge, COLORREF 0x00BBGGRR
-        _dwmRounded = DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int)) == 0;
-        if (_dwmRounded) DwmSetWindowAttribute(Handle, 34, ref border, sizeof(int));
-        ApplyRegion();
-    }
-
-    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
-    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+    private void LayoutPad() => _pad.SetBounds(16, PadTop, W - 32, PadBottom - PadTop);
 
     // ---- public API ----
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } Raise(); });
@@ -288,7 +261,7 @@ internal sealed class NotesPanel : Form, INotesView
     {
         if (_discardArmed && (DateTime.Now - _discardArmedAt).TotalSeconds > 3.5) { _discardArmed = false; Invalidate(); }
         if (_toast != null && (DateTime.Now - _toastAt).TotalSeconds > 1.5) { _toast = null; Invalidate(); }
-        if (_recording) Invalidate(new Rectangle(0, 0, Width, WellTop));
+        if (_recording) Invalidate(new Rectangle(0, 0, Width, PadTop));
     }
 
     // ---- footer actions ----
@@ -318,21 +291,15 @@ internal sealed class NotesPanel : Form, INotesView
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
         g.Clear(Bg);
 
-        if (!_dwmRounded)
-        {
-            using var bp = Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 14);
-            using var pen = new Pen(Border);
-            g.DrawPath(pen, bp);
-        }
-
-        // The pad's well: darker and inset, like the recorder's level meter; the text box sits inside it.
-        using (var wp = Rounded(WellRect, 9))
-        {
-            using (var wb = new SolidBrush(Well)) g.FillPath(wb, wp);
-            using (var we = new Pen(WellEdge)) g.DrawPath(we, wp);
-        }
+        using (var bp = Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 14))
+        using (var pen = new Pen(Border)) g.DrawPath(pen, bp);
 
         DrawHeader(g);
+        using (var dp = new Pen(Divider)) g.DrawLine(dp, 16, HeaderDivY, Width - 16, HeaderDivY);
+
+        (string hint, Color hintCol) = HintLine();
+        TextRenderer.DrawText(g, hint, _hintFont, new Rectangle(16, HintY, Width - 32, 14), hintCol,
+            TextFormatFlags.NoPrefix | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
 
         if (_hasTranscript)
         {
@@ -358,33 +325,18 @@ internal sealed class NotesPanel : Form, INotesView
 
     private void DrawHeader(Graphics g)
     {
-        // The recorder's white tile, with three ruled lines for the notepad in place of the waveform.
-        using (var tile = new SolidBrush(Color.FromArgb(236, 236, 236)))
+        using (var tile = new SolidBrush(Color.FromArgb(44, 44, 47)))
         using (var tp = Rounded(IconTile, 6)) g.FillPath(tile, tp);
-        using (var ink = new Pen(Color.FromArgb(28, 28, 28), 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
-        {
-            float x0 = IconTile.X + 6.5f, cy = IconTile.Y + IconTile.Height / 2f;
-            g.DrawLine(ink, x0, cy - 4.5f, IconTile.Right - 6.5f, cy - 4.5f);
-            g.DrawLine(ink, x0, cy, IconTile.Right - 6.5f, cy);
-            g.DrawLine(ink, x0, cy + 4.5f, IconTile.Right - 10.5f, cy + 4.5f);
-        }
+        // A pen stroke in the tile: the notepad's glyph, the recorder's dot stays the recorder's.
+        using (var pen = new Pen(_recording ? Red : Color.FromArgb(150, 150, 154), 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawLine(pen, IconTile.X + 7, IconTile.Y + 15, IconTile.X + 15, IconTile.Y + 7);
+
+        TextRenderer.DrawText(g, "Notes", _titleFont, new Point(46, 14), TitleCol, TextFormatFlags.NoPrefix);
         if (_recording)
         {
-            using var ring = new SolidBrush(Bg);
-            using var dot = new SolidBrush(Red);
-            g.FillEllipse(ring, IconTile.Right - 7, IconTile.Y - 3, 11, 11);
-            g.FillEllipse(dot, IconTile.Right - 5, IconTile.Y - 1, 7, 7);
+            int tw = TextRenderer.MeasureText(g, "Notes", _titleFont).Width;
+            TextRenderer.DrawText(g, $"·  REC  {Elapsed()}", _subFont, new Point(46 + tw + 6, 16), Red, TextFormatFlags.NoPrefix);
         }
-
-        // Beside the tile: REC and the time while recording, else the hint (discard confirm, a toast, the job's
-        // progress after a meeting), up to the buttons.
-        int right = ActionsShown ? (_recording ? TrashRect.X : Pill.X) - 8 : Width - 14;
-        var text = new Rectangle(IconTile.Right + 10, IconTile.Y, right - IconTile.Right - 10, IconTile.Height);
-        (string hint, Color hintCol) = HintLine();
-        if (_recording && !_discardArmed && _toast == null)
-            TextRenderer.DrawText(g, $"REC  {Elapsed()}", _titleFont, text, Red, TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
-        else if (hint.Length > 0)
-            TextRenderer.DrawText(g, hint, _subFont, text, hintCol, TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
 
         if (!ActionsShown) return;
         DrawActionPill(g, Pill, _recording);
@@ -394,7 +346,7 @@ internal sealed class NotesPanel : Form, INotesView
     // A ghost pill: thin border, muted text, filled faintly on hover.
     private void DrawFooterButton(Graphics g, Rectangle rect, string text, bool hover)
     {
-        using var path = Rounded(rect, rect.Height / 2);
+        using var path = Rounded(rect, 8);
         if (hover)
         {
             using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
@@ -410,13 +362,13 @@ internal sealed class NotesPanel : Form, INotesView
         if (armed)
         {
             using var fb = new SolidBrush(hover ? RedHover : Red);
-            using var fp = Rounded(rect, rect.Height / 2);
+            using var fp = Rounded(rect, 8);
             g.FillPath(fb, fp);
         }
         else if (hover)
         {
             using var hb = new SolidBrush(Color.FromArgb(36, 255, 255, 255));
-            using var hp = Rounded(rect, rect.Height / 2);
+            using var hp = Rounded(rect, 8);
             g.FillPath(hb, hp);
         }
         var col = armed ? Color.White : (hover ? RedHover : Muted);
@@ -431,18 +383,11 @@ internal sealed class NotesPanel : Form, INotesView
 
     private void DrawActionPill(Graphics g, Rectangle rect, bool isStop)
     {
-        using (var pp = Rounded(rect, rect.Height / 2))
-        {
-            using (var b = new SolidBrush(_btnHover ? RedHover : Red)) g.FillPath(b, pp);
-            var clip = g.Clip;
-            g.SetClip(pp);
-            using (var hl = new Pen(Color.FromArgb(56, 255, 255, 255), 1f))
-                g.DrawLine(hl, rect.X + rect.Height / 2f, rect.Y + 0.5f, rect.Right - rect.Height / 2f, rect.Y + 0.5f);
-            g.Clip = clip;
-        }
+        using (var b = new SolidBrush(_btnHover ? RedHover : Red))
+        using (var pp = Rounded(rect, 8)) g.FillPath(b, pp);
 
         string text = isStop ? "Stop" : "Record";
-        const int glyph = 8, gap = 6;
+        const int glyph = 9, gap = 7;
         int tw = TextRenderer.MeasureText(g, text, _pillFont, Size.Empty, TextFormatFlags.NoPadding).Width;
         int total = glyph + gap + tw;
         int sx = rect.X + (rect.Width - total) / 2;
@@ -585,7 +530,6 @@ internal sealed class NotesPanel : Form, INotesView
 
     private void ApplyRegion()
     {
-        if (_dwmRounded) { Region = null; return; }
         using var p = Rounded(new Rectangle(0, 0, Width, Height), 14);
         Region = new Region(p);
     }

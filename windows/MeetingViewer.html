@@ -262,7 +262,7 @@ window.huginnOpen = (json) => {
   const m = typeof json === "string" ? JSON.parse(json) : json;
   let cur = meetings.find((x) => x.id === m.id);
   if (cur) Object.assign(cur, m, { parsed: null });
-  else { cur = { ...m, tab: m.summary ? "summary" : "transcript", open: false }; meetings.push(cur); }
+  else { cur = { ...m, tab: "transcript", open: false }; meetings.push(cur); } // a meeting opens on its transcript (Bohdan, 2026-11-20)
   active = cur.id;
   render();
 };

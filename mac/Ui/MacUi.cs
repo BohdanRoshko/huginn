@@ -65,7 +65,7 @@ internal static class MacUi
 
     // ---- palette (MeetingPanel's colours) ----
 
-    public static readonly NSColor Bg = Rgb(30, 30, 32);
+    public static readonly NSColor Bg = Rgb(32, 32, 33);   // #202021, the Windows recorder and notes pad (Bohdan, 2026-11-20)
     public static readonly NSColor Border = Rgb(255, 255, 255, 20);
     public static readonly NSColor Divider = Rgb(255, 255, 255, 16);
     public static readonly NSColor TitleCol = Rgb(234, 234, 236);
@@ -253,17 +253,18 @@ internal static class MacUi
 
     // ---- panels ----
 
-    /// <summary>A borderless, non-activating floating panel with a clear background (the view draws the card).
-    /// <paramref name="canBecomeKey"/> = the panel can take the keyboard (text entry).</summary>
-    public static NSPanel MakePanel(CGRect frame, bool canBecomeKey)
+    /// <summary>A borderless, non-activating panel with a clear background (the view draws the card).
+    /// <paramref name="canBecomeKey"/> = the panel can take the keyboard (text entry). <paramref name="floating"/> = it
+    /// stays above other apps' windows; the recorder and the notes pad do not (Bohdan, 2026-11-20).</summary>
+    public static NSPanel MakePanel(CGRect frame, bool canBecomeKey, bool floating = true)
     {
         var style = NSWindowStyle.Borderless | NSWindowStyle.NonactivatingPanel;
         NSPanel panel = canBecomeKey
             ? new MacKeyPanel(frame, style, NSBackingStore.Buffered, false)
             : new NSPanel(frame, style, NSBackingStore.Buffered, false);
         panel.ReleasedWhenClosed = false;
-        panel.FloatingPanel = true;
-        panel.Level = NSWindowLevel.Floating;
+        panel.FloatingPanel = floating;
+        panel.Level = floating ? NSWindowLevel.Floating : NSWindowLevel.Normal;
         panel.HidesOnDeactivate = false;
         panel.CollectionBehavior = NSWindowCollectionBehavior.CanJoinAllSpaces | NSWindowCollectionBehavior.FullScreenAuxiliary;
         panel.BackgroundColor = NSColor.Clear;

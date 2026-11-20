@@ -9,6 +9,11 @@ on:
     branches: [main]
     paths: ['core/**', 'mac/**', 'windows/**', 'tests/**', 'Huginn.sln', '.github/workflows/huginn.yml']
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a GitHub Release (false = build and photograph only, to check a change first)
+        type: boolean
+        default: true
 
 env:
   DOTNET_NOLOGO: true
@@ -149,6 +154,21 @@ jobs:
           screencapture -x shots/prompt.png || echo "screencapture failed (prompt)"
           pkill -x Huginn || true
           sleep 2
+          # The same pop-up grown, as under the mouse: the strip with the running note and the close button.
+          HUGINN_UI_PROBE=prompt-hover "$APP/Contents/MacOS/Huginn" >> "$RUNNER_TEMP/ui.log" 2>&1 &
+          sleep 12
+          screencapture -x shots/prompt-hover.png || echo "screencapture failed (prompt-hover)"
+          pkill -x Huginn || true
+          sleep 2
+          # The meeting window with a sample meeting, as the open button on a finished row shows it.
+          # Its own data folder, so its sample rows do not pile onto the recorder photo's.
+          mkdir -p "$RUNNER_TEMP/huginn-meeting"
+          cp "$RUNNER_TEMP/huginn-data/ggml-large-v3-turbo.bin" "$RUNNER_TEMP/huginn-meeting/" || true
+          HUGINN_DATA_DIR="$RUNNER_TEMP/huginn-meeting" HUGINN_UI_PROBE=meeting "$APP/Contents/MacOS/Huginn" >> "$RUNNER_TEMP/ui.log" 2>&1 &
+          sleep 14
+          screencapture -x shots/meeting.png || echo "screencapture failed (meeting)"
+          pkill -x Huginn || true
+          sleep 2
           # The optional windows: recorder panel, Notes window, dictation pill.
           HUGINN_UI_PROBE=windows "$APP/Contents/MacOS/Huginn" >> "$RUNNER_TEMP/ui.log" 2>&1 &
           sleep 14
@@ -195,7 +215,7 @@ jobs:
   # Every hand-started build becomes a GitHub Release with both zips, so anyone can download Huginn from
   # https://github.com/BohdanRoshko/huginn/releases/latest without building it or signing in.
   release:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: [windows, mac]
     runs-on: ubuntu-latest
     permissions:

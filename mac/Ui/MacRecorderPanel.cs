@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using AppKit;
 using CoreGraphics;
 using Foundation;
@@ -7,18 +8,25 @@ using static Huginn.MacUi;
 namespace Huginn;
 
 /// <summary>
-/// The Mac port of the Windows MeetingPanel: a compact dark card. Top row = icon · "Meeting" · live time and a red
-/// Record / Stop pill (with the two-click trash left of Stop while recording). The band under it is the live voice
-/// meter (flat when idle). Below that, the <see cref="RecentMeetings.DisplayMax"/> most recent recordings: name,
-/// time + status, a ✕ to cancel an in-flight one, a copy-path button on a finished one. Double-click a row (or
-/// right-click → Rename) to name it. Drag anywhere that is not a control to move it; right-click outside the rows
-/// hides it. Construct on the main thread; every public member is safe from any thread.
+/// The Mac port of the Windows MeetingPanel: a compact dark card. Top row = Huginn's white tile (with a red badge and
+/// "REC 00:01:23" while recording) and a red Record / Stop pill (with the two-click trash left of Stop while
+/// recording). The band under it is the live voice meter in a darker well (flat when idle). Below that, the
+/// <see cref="RecentMeetings.DisplayMax"/> most recent recordings, parted by thin lines and lit under the mouse: name,
+/// then the 24-hour time and the status as chips; a ✕ to cancel an in-flight one; open and copy-path buttons on a
+/// finished one. Double-click a row (or right-click → Rename) to name it. Drag anywhere that is not a control to move
+/// it; right-click outside the rows offers to hide it. It is not always on top: other windows can cover it, and the
+/// menu bar icon brings it back (Bohdan, 2026-11-20). Construct on the main thread; every public member is safe from
+/// any thread.
 /// </summary>
 internal sealed class MacRecorderPanel : IRecorderView
 {
     public event Action? RecordToggleRequested;
     /// <summary>Raised with a job id when the user clicks ✕ on an in-flight row.</summary>
     public event Action<int>? CancelRequested;
+    /// <summary>Raised with a row id when the user clicks the open button on a finished row.</summary>
+    public event Action<int>? OpenRequested;
+    /// <summary>Shows the task-count chip (only when settings.json names an Odin: Bohdan's machine).</summary>
+    public bool ShowOdin { get; set; }
     /// <summary>The two-click discard (trash) was confirmed while recording.</summary>
     public event Action? DiscardRequested;
     /// <summary>The panel was shown or hidden.</summary>
@@ -28,12 +36,22 @@ internal sealed class MacRecorderPanel : IRecorderView
 
     private const int W = 352;
     private const int DisplayMax = RecentMeetings.DisplayMax;
-    private const int MeterCy = 61;    // the meter band between the header and the list
-    private const int MeterMaxH = 30;  // bar height at full level
-    private const int JobsDividerY = 80;
-    private const int JobsTop = 84;
-    private const int RowH = 38;
-    private const int BottomPad = 8;
+    // The Windows panel's measures (Bohdan, 2026-11-20): 72 + 8 rows of 41 + 2 = 402, the VPN window's height.
+    private const int MeterCy = 53;    // the meter band between the header and the list
+    private const int MeterMaxH = 22;  // bar height at full level: room above and below inside the 32 px well
+    private const int JobsTop = 72;
+    private const int RowH = 41;       // 6 px between a row's text and the line above it, and 6 px to the line below
+    private const int BottomPad = 2;   // with the row's own 6 px, 8 px under the last row
+
+    // Surfaces, darkest to lightest: the meter well, the panel, a hovered row.
+    private static readonly NSColor Well = Rgb(24, 24, 25);
+    private static readonly NSColor WellEdge = Rgb(255, 255, 255, 10);
+    private static readonly NSColor RowHover = Rgb(46, 46, 47);
+    private static readonly NSColor RowLine = Rgb(255, 255, 255, 16);
+    private static readonly NSColor ChipBg = Rgb(255, 255, 255, 16);
+    private static readonly NSColor ChipText = Rgb(170, 170, 174);
+    private static readonly NSColor TileWhite = Rgb(236, 236, 236);
+    private static readonly NSColor Ink = Rgb(28, 28, 28);
 
     private readonly RecentMeetings _recent;
     private readonly NSPanel _panel;
@@ -54,6 +72,8 @@ internal sealed class MacRecorderPanel : IRecorderView
     private CGPoint _dragMouse, _dragOrigin;   // screen coordinates
     private int _hoverCancelId = -1;
     private int _hoverCopyId = -1;
+    private int _hoverOpenId = -1;
+    private int _hoverRow = -1;              // the row under the mouse: it lights up
     private int _copiedId = -1;              // the row whose path was just copied shows a check briefly
     private DateTime _copiedAt;
     private NSTextField? _editor;            // the inline rename box over a row's name line
@@ -76,7 +96,7 @@ internal sealed class MacRecorderPanel : IRecorderView
         _wave = new float[Math.Max(8, (W - 32) / 6)];
 
         int h = PanelHeight();
-        _panel = MakePanel(R(0, 0, W, h), canBecomeKey: true);
+        _panel = MakePanel(R(0, 0, W, h), canBecomeKey: true, floating: false); // other windows can cover it, as on Windows
         _panel.BecomesKeyOnlyIfNeeded = true;   // a click does not take the keyboard; only the rename box does
         _panel.AcceptsMouseMovedEvents = true;
         _view = new RecorderView(this, R(0, 0, W, h));
@@ -119,6 +139,9 @@ internal sealed class MacRecorderPanel : IRecorderView
         if (!wasShown) SetShown(true);
     });
 
+    /// <summary>Puts the panel above other windows once, without taking the keyboard (the menu bar icon was clicked).</summary>
+    public void Raise() => OnMain(() => { if (_panel.IsVisible) _panel.OrderFrontRegardless(); });
+
     public void HidePanel() => OnMain(() =>
     {
         CancelRename();
@@ -154,7 +177,7 @@ internal sealed class MacRecorderPanel : IRecorderView
     /// <summary>A live input level (0..1) for the meter. Any thread: a single float write.</summary>
     public void SetLevel(float level01)
     {
-        float v = Math.Clamp((float)Math.Sqrt(Math.Max(0f, level01)) * 1.6f, 0f, 1f);
+        float v = Math.Clamp((float)Math.Sqrt(Math.Max(0f, level01)) * 2.4f, 0f, 1f); // normal speech reaches most of the well
         if (v > _incoming) _incoming = v;
     }
 
@@ -188,11 +211,19 @@ internal sealed class MacRecorderPanel : IRecorderView
 
     // ---- layout (flipped view: y runs down, the Windows coordinates) ----
 
-    private static CGRect IconTile => R(15, 13, 22, 22);
-    private CGRect Pill => _recording ? R(W - 14 - 80, 11, 80, 28) : R(W - 14 - 96, 11, 96, 28);
+    // The header: Huginn's tile and the Record pill, both 24 px tall on one line, 6 px from the top and 6 px from the
+    // meter well (Bohdan, 2026-11-20).
+    private static CGRect IconTile => R(14, 7, 24, 24);
+    private CGRect Pill => _recording ? R(W - 14 - 72, 7, 72, 24) : R(W - 14 - 88, 7, 88, 24);
     /// <summary>The trash: only while recording, left of the Stop pill.</summary>
-    private static CGRect TrashRect => R(W - 14 - 80 - 8 - 28, 11, 28, 28);
-    private static CGRect CancelRect(int index) => R(W - 36, JobsTop + index * RowH + 8, 22, 22);
+    private static CGRect TrashRect => R(W - 14 - 72 - 8 - 24, 7, 24, 24);
+    // Centred between the lines above and below the row. Open sits at the right edge, copy left of it.
+    private static CGRect CancelRect(int index) => R(W - 36, JobsTop + index * RowH + RowH / 2 - 11, 22, 22);
+    private static CGRect OpenRect(int index) => CancelRect(index);
+    private static CGRect CopyRect(int index) { var r = CancelRect(index); return R((double)r.X - 26, r.Y, r.Width, r.Height); }
+
+    // A finished meeting with a transcript can be opened (the meeting window) and its path copied.
+    private static bool CanOpen(RecentMeeting e) => !e.Cancelable && e.Transcript != null;
 
     // Fixed, as on Windows: the header + DisplayMax row slots; empty slots draw a skeleton, so the height never
     // changes with how many meetings exist.
@@ -219,29 +250,55 @@ internal sealed class MacRecorderPanel : IRecorderView
     internal void Draw()
     {
         DrawCard(R(0, 0, W, PanelHeight()));
+        // The meter's well: a darker inset band, so the level reads as a live instrument, not loose bars.
+        var well = R(14, MeterCy - 16, W - 28, 32);
+        FillRounded(well, 9, Well);
+        StrokeRounded(R(14.5, MeterCy - 15.5, W - 29, 31), 8.5, WellEdge);
         DrawHeader();
         // While the trash is armed the meter band shows the confirm hint: the icon-only button needs it.
         if (_recording && _discardArmed)
             DrawText("Click the trash again to DELETE this recording.", FootFont, Red, R(16, MeterCy - 7, W - 32, 14));
         else
-            DrawMeter(16, W - 16, MeterCy);
+            DrawMeter(22, W - 22, MeterCy);
         DrawEntries();
     }
 
     private void DrawHeader()
     {
-        FillRounded(IconTile, 6, Tile);
-        FillOval(R(15 + 7, 13 + 7, 8, 8), _recording ? Red : IconIdle);
-
-        DrawText("Meeting", TitleFont, TitleCol, 46, 14);
+        // Huginn's tile, the same one the meeting pop-up shows: white, with the waveform in ink.
+        var tile = IconTile;
+        double tx = tile.X, ty = tile.Y, tw = tile.Width, th = tile.Height;
+        FillRounded(tile, 6, TileWhite);
+        double[] bars = { 5.5, 11, 16, 10, 13, 6.5 };
+        double barsX = tx + (tw - (5 * 2.8 + 1.7)) / 2; // the waveform centred in the tile
+        for (int i = 0; i < bars.Length; i++)
+            FillRounded(R(barsX + i * 2.8, ty + (th - bars[i]) / 2, 1.7, bars[i]), 0.85, Ink);
         if (_recording)
         {
-            double tw = TextWidth("Meeting", TitleFont);
-            DrawText($"·  REC  {Elapsed(_startedLocal)}", SubFont, Red, 46 + tw + 6, 16);
+            // A red badge on the tile's corner, ringed in the panel colour so it sits on top.
+            FillOval(R(tx + tw - 7, ty - 3, 11, 11), Bg);
+            FillOval(R(tx + tw - 5, ty - 1, 7, 7), Red);
+            DrawText($"REC  {Elapsed(_startedLocal)}", TitleFont, Red, R(tx + tw + 10, ty, 200, th), NSLineBreakMode.Clipping);
         }
 
-        DrawActionPill(Pill, _recording, _btnHover);
+        DrawPill(Pill, _recording, _btnHover);
         if (_recording) DrawTrash(TrashRect, _discardHover, _discardArmed);
+    }
+
+    // The red pill, fully round, with a hairline of light along its top so it reads as raised.
+    private static void DrawPill(CGRect rect, bool isStop, bool hover)
+    {
+        double rx = rect.X, ry = rect.Y, rw = rect.Width, rh = rect.Height;
+        FillRounded(rect, rh / 2, hover ? RedHover : Red);
+        Line(rx + rh / 2, ry + 0.5, rx + rw - rh / 2, ry + 0.5, Rgb(255, 255, 255, 56), 1);
+        string text = isStop ? "Stop" : "Record";
+        const double glyph = 8, gap = 6;
+        var size = Measure(text, RowNameFont);
+        double total = glyph + gap + size.Width;
+        double sx = Math.Round(rx + (rw - total) / 2), cy = ry + rh / 2;
+        if (isStop) FillRounded(R(sx, cy - glyph / 2, glyph, glyph), 2, White);
+        else FillOval(R(sx, cy - glyph / 2, glyph, glyph), White);
+        DrawText(text, RowNameFont, White, sx + glyph + gap, cy - (double)size.Height / 2);
     }
 
     private void DrawMeter(int x0, int x1, int cy)
@@ -252,29 +309,36 @@ internal sealed class MacRecorderPanel : IRecorderView
         {
             float lvl = _wave[_wave.Length - n + i];
             double h = Math.Max(2f, lvl * MeterMaxH);
-            int a = 30 + (int)(170 * Math.Min(1f, lvl));
-            FillRounded(R(x0 + i * step, cy - h / 2, barW, h), 1.5, Rgb(232, 232, 236, a));
+            int a = 60 + (int)(195 * Math.Min(1f, lvl));
+            FillRounded(R(x0 + i * step, cy - h / 2, barW, h), 1.5, Rgb(240, 240, 242, a));
         }
     }
 
     private void DrawEntries()
     {
-        FillRect(R(16, JobsDividerY, W - 32, 1), Divider);
+        // A thin line between rows, so the buttons on the right are easy to match to their meeting.
+        for (int i = 1; i < DisplayMax; i++)
+            FillRect(R(16, JobsTop + i * RowH, W - 32, 1), RowLine);
         for (int i = 0; i < DisplayMax; i++)
         {
             int top = JobsTop + i * RowH;
-            if (i < _entries.Count) DrawEntryRow(_entries[i], i, top);
+            if (i < _entries.Count)
+            {
+                if (i == _hoverRow && _editingId == -1) FillRounded(R(10, top + 1, W - 20, RowH - 2), 6, RowHover);
+                DrawEntryRow(_entries[i], i, top);
+            }
             else DrawSkeletonRow(i, top);
         }
     }
 
     private void DrawEntryRow(RecentMeeting entry, int i, int top)
     {
+        if (entry.Cancelable) FillOval(R(16, top + 12, 13, 13), ToneColor(entry.Tone).ColorWithAlphaComponent((NFloat)0.22));
         FillOval(R(19, top + 15, 7, 7), ToneColor(entry.Tone));
 
         bool cancelable = entry.Cancelable;
-        bool copyable = entry.CanCopy;
-        int rightPad = cancelable || copyable ? 40 : 16;
+        bool open = CanOpen(entry);
+        int rightPad = open ? 66 : cancelable ? 40 : 16;
         int nameW = W - 34 - rightPad;
 
         // Line 1 = the meeting NAME once known; the live status before that.
@@ -283,12 +347,41 @@ internal sealed class MacRecorderPanel : IRecorderView
         if (entry.Id != _editingId)
             DrawText(name, RowNameFont, nameCol, R(34, top + 4, nameW, 16));
 
-        // Line 2 = the recorded time, plus the status when line 1 is already the title.
-        string meta = entry.Title != null ? $"{entry.Started:h:mm tt}  ·  {entry.Status}" : $"{entry.Started:h:mm tt}";
-        DrawText(meta, RowMetaFont, Muted, R(34, top + 21, nameW, 14));
+        // Line 2 = the 24-hour time, then the status as chips when the name line is already the title.
+        var time = entry.Started.ToString("HH:mm");
+        DrawText(time, RowMetaFont, Muted, R(34, top + 21, 40, 14), NSLineBreakMode.Clipping);
+        if (entry.Title != null)
+        {
+            double x = 34 + TextWidth(time, RowMetaFont) + 8;
+            foreach (var chip in RecentMeetings.StatusChips(entry.Status, ShowOdin))
+            {
+                double w = Math.Ceiling(TextWidth(chip, RowMetaFont)) + 12;
+                if (x + w > 34 + nameW) break;
+                var r = R(x, top + 20, w, 15);
+                FillRounded(r, 4, ChipBg);
+                DrawText(chip, RowMetaFont, ChipText, r, NSLineBreakMode.Clipping, NSTextAlignment.Center);
+                x += w + 4;
+            }
+        }
 
         if (cancelable) DrawCancel(CancelRect(i), entry.Id == _hoverCancelId);
-        else if (copyable) DrawCopy(CancelRect(i), entry.Id == _hoverCopyId, entry.Id == _copiedId);
+        if (open)
+        {
+            DrawCopy(CopyRect(i), entry.Id == _hoverCopyId, entry.Id == _copiedId, i == _hoverRow);
+            DrawOpen(OpenRect(i), entry.Id == _hoverOpenId);
+        }
+    }
+
+    // "Open": a rounded square with an arrow leaving its top-right corner.
+    private static void DrawOpen(CGRect hit, bool hover)
+    {
+        if (hover) FillRounded(hit, 6, HoverFill);
+        double hx = hit.X, hy = hit.Y, hw = hit.Width, hh = hit.Height;
+        double cx = hx + hw / 2, cy = hy + hh / 2;
+        var col = hover ? TitleCol : Muted;
+        Polyline(col, 1.3, (cx - 0.5, cy - 5), (cx - 5, cy - 5), (cx - 5, cy + 5), (cx + 5, cy + 5), (cx + 5, cy + 0.5));
+        Line(cx - 1, cy + 1, cx + 5.5, cy - 5.5, col, 1.3);
+        Polyline(col, 1.3, (cx + 1.5, cy - 5.5), (cx + 5.5, cy - 5.5), (cx + 5.5, cy - 1.5));
     }
 
     // An empty slot: a muted dot + two rounded "loading" bars, widths varied per slot.
@@ -315,7 +408,7 @@ internal sealed class MacRecorderPanel : IRecorderView
     }
 
     // The copy icon: two overlapping rounded squares; right after a copy it shows a check instead.
-    private static void DrawCopy(CGRect hit, bool hover, bool copied)
+    private static void DrawCopy(CGRect hit, bool hover, bool copied, bool rowLit)
     {
         if (hover) FillRounded(hit, 6, HoverFill);
         double hx = hit.X, hy = hit.Y, hw = hit.Width, hh = hit.Height;
@@ -328,7 +421,7 @@ internal sealed class MacRecorderPanel : IRecorderView
         var col = hover ? TitleCol : Muted;
         StrokeRounded(R(cx - 2.5, cy - 5.5, 8, 8), 1.8, col, 1.3);
         var front = R(cx - 5.5, cy - 2.5, 8, 8);
-        FillRounded(front, 1.8, Bg);                 // hides the back square's corner behind the front one
+        FillRounded(front, 1.8, rowLit ? RowHover : Bg); // hides the back square's corner behind the front one
         if (hover) FillRounded(front, 1.8, HoverFill);
         StrokeRounded(front, 1.8, col, 1.3);
     }
@@ -345,6 +438,7 @@ internal sealed class MacRecorderPanel : IRecorderView
 
     internal void OnMouseDown(CGPoint p, NSEvent e)
     {
+        _panel.OrderFrontRegardless(); // a click brings the panel above the windows covering it
         if (_editor != null && !EditorFrame().Contains(p)) CommitRename();
         if (Pill.Contains(p)) { RecordToggleRequested?.Invoke(); return; }
         if (_recording && TrashRect.Contains(p))
@@ -356,14 +450,14 @@ internal sealed class MacRecorderPanel : IRecorderView
         }
         for (int i = 0; i < _entries.Count; i++)
         {
-            if (!CancelRect(i).Contains(p)) continue;
-            if (_entries[i].Cancelable) { CancelRequested?.Invoke(_entries[i].Id); return; }
-            if (_entries[i].CanCopy) { CopyPath(_entries[i]); return; }
+            if (_entries[i].Cancelable && CancelRect(i).Contains(p)) { CancelRequested?.Invoke(_entries[i].Id); return; }
+            if (CanOpen(_entries[i]) && CopyRect(i).Contains(p)) { CopyPath(_entries[i]); return; }
+            if (CanOpen(_entries[i]) && OpenRect(i).Contains(p)) { OpenRequested?.Invoke(_entries[i].Id); return; }
         }
         if (e.ClickCount == 2)
         {
             int row = RowAt(p);
-            if (row >= 0 && !CancelRect(row).Contains(p))
+            if (row >= 0 && !CancelRect(row).Contains(p) && !CopyRect(row).Contains(p))
             {
                 _dragging = false; // a rename, not a move
                 BeginRename(_entries[row], row);
@@ -421,19 +515,22 @@ internal sealed class MacRecorderPanel : IRecorderView
         bool th = _recording && TrashRect.Contains(p);
         if (th != _discardHover) { _discardHover = th; redraw = true; }
 
-        int hover = -1, copyHover = -1;
+        int row = RowAt(p);
+        if (row != _hoverRow) { _hoverRow = row; redraw = true; }
+
+        int hover = -1, copyHover = -1, openHover = -1;
         for (int i = 0; i < _entries.Count; i++)
         {
-            if (!CancelRect(i).Contains(p)) continue;
-            if (_entries[i].Cancelable) hover = _entries[i].Id;
-            else if (_entries[i].CanCopy) copyHover = _entries[i].Id;
-            break;
+            if (_entries[i].Cancelable && CancelRect(i).Contains(p)) { hover = _entries[i].Id; break; }
+            if (CanOpen(_entries[i]) && CopyRect(i).Contains(p)) { copyHover = _entries[i].Id; break; }
+            if (CanOpen(_entries[i]) && OpenRect(i).Contains(p)) { openHover = _entries[i].Id; break; }
         }
         if (hover != _hoverCancelId) { _hoverCancelId = hover; redraw = true; }
-        if (copyHover != _hoverCopyId)
+        if (copyHover != _hoverCopyId || openHover != _hoverOpenId)
         {
             _hoverCopyId = copyHover;
-            (copyHover == -1 ? NSCursor.ArrowCursor : NSCursor.PointingHandCursor).Set();
+            _hoverOpenId = openHover;
+            (copyHover == -1 && openHover == -1 ? NSCursor.ArrowCursor : NSCursor.PointingHandCursor).Set();
             redraw = true;
         }
         if (redraw) _view.NeedsDisplay = true;
@@ -442,12 +539,14 @@ internal sealed class MacRecorderPanel : IRecorderView
     internal void OnMouseExited()
     {
         if (_dragging) return;
-        bool changed = _btnHover || _discardHover || _hoverCancelId != -1 || _hoverCopyId != -1;
-        if (_hoverCopyId != -1) NSCursor.ArrowCursor.Set();
+        bool changed = _btnHover || _discardHover || _hoverCancelId != -1 || _hoverCopyId != -1 || _hoverOpenId != -1 || _hoverRow != -1;
+        if (_hoverCopyId != -1 || _hoverOpenId != -1) NSCursor.ArrowCursor.Set();
         _btnHover = false;
         _discardHover = false;
         _hoverCancelId = -1;
         _hoverCopyId = -1;
+        _hoverOpenId = -1;
+        _hoverRow = -1;
         if (changed) _view.NeedsDisplay = true;
     }
 
@@ -495,14 +594,14 @@ internal sealed class MacRecorderPanel : IRecorderView
         CancelRename();
         if (row < 0 || row >= _entries.Count || _entries[row].Id != entry.Id) return;
         int top = JobsTop + row * RowH;
-        int nameW = W - 34 - (entry.Cancelable || entry.CanCopy ? 40 : 16);
+        int nameW = W - 34 - (CanOpen(entry) ? 66 : entry.Cancelable ? 40 : 16);
         _editingId = entry.Id;
         var box = new NSTextField(R(34, top + 2, nameW, 18))
         {
             Bordered = false,
             Bezeled = false,
             DrawsBackground = true,
-            BackgroundColor = Tile,
+            BackgroundColor = RowHover,
             TextColor = TitleCol,
             Font = RowNameFont,
             StringValue = entry.Title ?? "",

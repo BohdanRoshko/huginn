@@ -75,6 +75,11 @@
     <ProjectReference Include="..\core\Huginn.Core.csproj" />
   </ItemGroup>
 
+  <!-- The meeting window's page, shared with the Windows app. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\windows\MeetingViewer.html" LogicalName="Huginn.MeetingViewer.html" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Whisper's native build (Metal on arm64). Its build targets are NOT imported: they make the macOS SDK link
          libwhisper at build time, and the linker then demands functions the Mac build lacks (OpenVINO). Whisper.net

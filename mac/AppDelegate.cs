@@ -58,6 +58,8 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
         _panel.RecordToggleRequested += _engine.ToggleMeeting;
         _panel.CancelRequested += _engine.CancelJob;
+        _panel.OpenRequested += id => _ = _engine.OpenMeetingAsync(id);
+        _panel.ShowOdin = _engine.HasOdin;
         _panel.DiscardRequested += _engine.Discard;
         _notes.RecordToggleRequested += _engine.ToggleMeeting;
         _notes.DiscardRequested += _engine.Discard;
@@ -186,6 +188,19 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
     public void OpenOdinNote(string slug) =>
         MacUi.OnMain(() => NSWorkspace.SharedWorkspace.OpenUrl(new NSUrl($"{Config.OdinBaseUrl}/?page=notes&note={Uri.EscapeDataString(slug)}")));
 
+    // Huginn's meeting window: one window, a tab per meeting; made again after it was closed.
+    private MacMeetingWindow? _meetingWindow;
+
+    public void ShowMeeting(MeetingView view) => MacUi.OnMain(() =>
+    {
+        if (_meetingWindow == null)
+        {
+            _meetingWindow = new MacMeetingWindow();
+            _meetingWindow.Closed += () => _meetingWindow = null;
+        }
+        _meetingWindow.ShowMeeting(view);
+    });
+
     // ---- menu ----
 
     private static NSCellStateValue On(bool on) => on ? NSCellStateValue.On : NSCellStateValue.Off;
@@ -214,6 +229,10 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
     {
         var m = _menu;
         m.RemoveAllItems();
+        // A click on the menu bar icon also brings the recorder and the notes pad above other windows, as the tray
+        // icon does on Windows: they are no longer always on top.
+        _panel.Raise();
+        _notes.Raise();
 
         _statusLine = Item(StatusLine());
         m.AddItem(_statusLine);
@@ -241,7 +260,13 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
         m.AddItem(NSMenuItem.SeparatorItem);
         if (_engine.HasOdin) // only Bohdan has Odin
+        {
             m.AddItem(Check("Auto-File Meetings to Odin", _engine.SendMeetings, () => _engine.SetSendMeetings(!_engine.SendMeetings)));
+            var where = new NSMenu { AutoEnablesItems = false };
+            where.AddItem(Check("Huginn Window", !_engine.OpenMeetingsInOdin, () => _engine.SetOpenMeetingsInOdin(false)));
+            where.AddItem(Check("Odin", _engine.OpenMeetingsInOdin, () => _engine.SetOpenMeetingsInOdin(true)));
+            m.AddItem(Sub("Open Meetings In", where));
+        }
         if (_engine.KumoInstalled)
         {
             var kumo = Item(_engine.KumoStatusText, () => _ = _engine.RestartKumoAsync());
@@ -274,6 +299,7 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         var sub = new NSMenu { AutoEnablesItems = false };
         var path = RecentMeetings.ResolveTranscript(job);
         bool has = File.Exists(path);
+        var meeting = Item("Open Meeting", () => _ = _engine.OpenMeetingAsync(job.Id)); meeting.Enabled = has && !job.Cancelable; sub.AddItem(meeting);
         var open = Item("Open Transcript", () => MacUi.Open(path)); open.Enabled = has; sub.AddItem(open);
         sub.AddItem(Item("Rename…", () => Rename(job)));
         var show = Item("Show in Finder", () => MacUi.Reveal(path)); show.Enabled = has; sub.AddItem(show);

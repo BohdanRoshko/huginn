@@ -27,8 +27,8 @@ internal sealed class MacNotesWindow : INotesView
     /// <summary>Right-click on the header: hide this window (and the recorder, when they are paired).</summary>
     public event Action? HideRequested;
 
-    // Exactly the recorder's size (its JobsTop + DisplayMax rows + BottomPad).
-    private const int W = 352, H = 396;
+    // Exactly the recorder's size (its JobsTop + DisplayMax rows + BottomPad): 402, as on Windows (Bohdan, 2026-11-20).
+    private const int W = 352, H = 402;
     private const int HeaderDivY = 48;
     private const int HintY = 54;
     private const int PadTop = 72;
@@ -74,7 +74,7 @@ internal sealed class MacNotesWindow : INotesView
     {
         _transcriptResolver = transcriptResolver;
 
-        _panel = MakePanel(R(0, 0, W, H), canBecomeKey: true);
+        _panel = MakePanel(R(0, 0, W, H), canBecomeKey: true, floating: false); // other windows can cover it, as on Windows
         _panel.BecomesKeyOnlyIfNeeded = false;  // a click into the pad takes the keyboard
         _panel.AcceptsMouseMovedEvents = true;
         _view = new NotesView(this, R(0, 0, W, H));
@@ -157,6 +157,9 @@ internal sealed class MacNotesWindow : INotesView
         _shown = true;
         UpdateHideActions();
     });
+
+    /// <summary>Puts the pad above other windows once, without taking the keyboard (the menu bar icon was clicked).</summary>
+    public void Raise() => OnMain(() => { if (_panel.IsVisible) _panel.OrderFrontRegardless(); });
 
     public void HidePanel() => OnMain(() =>
     {
@@ -402,6 +405,7 @@ internal sealed class MacNotesWindow : INotesView
 
     internal void OnMouseDown(CGPoint p)
     {
+        _panel.OrderFrontRegardless(); // a click brings the pad above the windows covering it
         if (ActionsShown && Pill.Contains(p)) { RecordToggleRequested?.Invoke(); return; }
         if (ActionsShown && _recording && TrashRect.Contains(p))
         {

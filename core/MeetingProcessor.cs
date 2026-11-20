@@ -10,11 +10,11 @@ internal sealed record MeetingResult(string TranscriptPath, string Text, int Seg
     string? RawTranscriptPath, EchoReport Echo);
 
 /// <summary>What the three echo gates did to the "Me" lines (see <see cref="EchoGate"/>).</summary>
-internal sealed record EchoReport(int MeLines, int RemovedSilent, int RemovedAcoustic, int RemovedText, int LagMs, double LagConfidence)
+internal sealed record EchoReport(int MeLines, int RemovedSilent, int RemovedUnheard, int RemovedAcoustic, int RemovedText, int LagMs, int LagEndMs, int Matched, int Pieces)
 {
-    public int Removed => RemovedSilent + RemovedAcoustic + RemovedText;
+    public int Removed => RemovedSilent + RemovedUnheard + RemovedAcoustic + RemovedText;
     public override string ToString() =>
-        $"lag {LagMs:+#;-#;0} ms (confidence {LagConfidence:F2}); of {MeLines} Me lines removed {RemovedSilent} silent, {RemovedAcoustic} echo, {RemovedText} by text";
+        $"lag {LagMs:+#;-#;0} ms at the start, {LagEndMs:+#;-#;0} ms at the end ({Matched} of {Pieces} pieces matched); of {MeLines} Me lines removed {RemovedSilent} silent, {RemovedUnheard} not heard by the meeting app, {RemovedAcoustic} echo, {RemovedText} by text";
 }
 
 /// <summary>
@@ -46,15 +46,48 @@ internal static class MeetingProcessor
             them.AddRange(await transcriber.TranscribeSegmentsAsync(wav, ct).ConfigureAwait(false));
         }
 
+        var timeline = SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp));
+        var (text, rawText, echo, lines) = Compose(me, them, micEnv, loopEnv, timeline, cap.StartedLocal, ReadSource(cap.Stamp), cap.Stamp);
+
+        var transcriptPath = TranscriptPathFor(cap.Stamp, null);
+        await File.WriteAllTextAsync(transcriptPath, text, new UTF8Encoding(false), ct).ConfigureAwait(false);
+        string? rawPath = null;
+        if (echo.Removed > 0)
+        {
+            rawPath = Path.Combine(Paths.MeetingsDir(), $"{cap.Stamp}_transcript.raw.txt");
+            await File.WriteAllTextAsync(rawPath, rawText, new UTF8Encoding(false), ct).ConfigureAwait(false);
+        }
+        return new MeetingResult(transcriptPath, text, lines, cap.MicPath, cap.LoopPath, rawPath, echo);
+    }
+
+    /// <summary>Turns the two tracks' segments into the transcript: drops the "Me" lines that are not the user,
+    /// names the "Them" lines, and adds what people did. No files, no model: the same segments always give the
+    /// same text. Returns the transcript, the untouched interleave, what the echo gates did, and the line count.</summary>
+    internal static (string Text, string RawText, EchoReport Echo, int Lines) Compose(
+        IReadOnlyList<TranscriptSegment> me, IReadOnlyList<TranscriptSegment> them, float[]? micEnv, float[]? loopEnv,
+        SpeakerTimeline? timeline, DateTime startedLocal, string? source, string stamp)
+    {
         // On speakers most "Me" lines are the far side again, and Whisper invents lines on silence. Two acoustic
         // gates, then the text pass; each keeps what it cannot prove. The untouched interleave is kept as .raw.
-        var verdict = EchoGate.Judge(me, micEnv, loopEnv);
+        bool kumo = timeline != null && timeline.HasKumospace;
+        var toMeeting = kumo ? MeetingClock(timeline!, loopEnv, stamp) : t => t;
+        double talk = HuginnSettings.Current.KumoTalkLevel;
+        var verdict = EchoGate.Judge(me, micEnv, loopEnv, kumo ? (s, e) => timeline!.HeardMe(toMeeting(s), toMeeting(e), talk) : null);
         var all = new List<(TimeSpan start, string speaker, string text)>();
         var kept = new List<(TimeSpan start, string speaker, string text)>();
+        int theirWords = 0;
         for (int i = 0; i < me.Count; i++)
         {
             all.Add((me[i].Start, "Me", me[i].Text));
-            if (!verdict.Drop[i]) kept.Add((me[i].Start, "Me", me[i].Text));
+            if (verdict.Drop[i]) continue;
+            // Both spoke at once: the line is theirs when its words, in their order, are what they had just said.
+            if (verdict.Mixed[i])
+            {
+                TimeSpan from = verdict.ToLoop(me[i].Start) - TimeSpan.FromSeconds(10), to = verdict.ToLoop(me[i].End) + TimeSpan.FromSeconds(0.5);
+                if (TranscriptReconciler.SaidByThem(me[i].Text, them.Where(t => t.Start >= from && t.Start <= to).Select(t => t.Text))) { theirWords++; continue; }
+            }
+            // A line Kumospace heard me say goes past the text pass under a label that pass does not read.
+            kept.Add((me[i].Start, verdict.Heard[i] ? SureMe : "Me", me[i].Text));
         }
         var themEnds = new Dictionary<(TimeSpan, string), TimeSpan>();
         foreach (var s in them)
@@ -66,25 +99,56 @@ internal static class MeetingProcessor
         all.Sort((a, b) => a.start.CompareTo(b.start));
         kept.Sort((a, b) => a.start.CompareTo(b.start));
 
-        var source = ReadSource(cap.Stamp);
-        var rawText = Format(all, cap.StartedLocal, source);
-        var reconciled = TranscriptReconciler.DeEcho(Format(kept, cap.StartedLocal, source));
+        var rawText = Format(all, startedLocal, source);
+        var reconciled = TranscriptReconciler.DeEcho(Format(kept, startedLocal, source));
         // De-echo needs the Me/Them labels, so the names from Kumospace go on after it.
-        var timeline = SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp));
-        var text = timeline == null || !timeline.HasKumospace ? reconciled.Text
-            : NameSpeakers(reconciled.Text, kept.Where(k => k.speaker == "Them").Select(k => (k.start, themEnds.GetValueOrDefault((k.start, k.text), k.start))).ToList(), timeline, cap.Stamp);
-        if (timeline != null && timeline.Events.Count > 0) text = AddEvents(text, timeline.Events);
-        var echo = new EchoReport(me.Count, verdict.Silent, verdict.Echo, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagConfidence);
-
-        var transcriptPath = TranscriptPathFor(cap.Stamp, null);
-        await File.WriteAllTextAsync(transcriptPath, text, new UTF8Encoding(false), ct).ConfigureAwait(false);
-        string? rawPath = null;
-        if (echo.Removed > 0)
+        var text = SureMeLine.Replace(reconciled.Text, "$1Me$2");
+        if (kumo)
         {
-            rawPath = Path.Combine(Paths.MeetingsDir(), $"{cap.Stamp}_transcript.raw.txt");
-            await File.WriteAllTextAsync(rawPath, rawText, new UTF8Encoding(false), ct).ConfigureAwait(false);
+            var spans = kept.Where(k => k.speaker == "Them")
+                .Select(k => (toMeeting(k.start), toMeeting(themEnds.GetValueOrDefault((k.start, k.text), k.start)))).ToList();
+            text = NameSpeakers(text, spans, timeline!, stamp);
         }
-        return new MeetingResult(transcriptPath, text, kept.Count - reconciled.RemovedEchoes, cap.MicPath, cap.LoopPath, rawPath, echo);
+        if (timeline != null && timeline.Events.Count > 0) text = AddEvents(text, timeline.Events);
+        var echo = new EchoReport(me.Count, verdict.Silent, verdict.Unheard, verdict.Echo + theirWords, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagEndMs, verdict.Matched, verdict.Pieces);
+        return (text, rawText, echo, kept.Count - reconciled.RemovedEchoes);
+    }
+
+    private const string SureMe = "Me+";
+    private static readonly System.Text.RegularExpressions.Regex SureMeLine =
+        new(@"^(\s*\[\d{1,2}:\d{2}:\d{2}\]\s*)Me\+(\s*:)", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.Multiline);
+
+    private const int ClockBinMs = 200; // Kumospace's level samples come every 200 ms
+    // 10 s pieces every 5 s; the first lag within ±3 s, then it may move 1 s per piece, at most 10 s after a gap.
+    private static readonly LagOptions MeetingToLoop = new(Window: 50, Step: 25, FirstSearch: 15, NextSearch: 5, MaxSearch: 50, SideOffset: 3)
+    { MinSharpness = 0.10 };
+
+    /// <summary>Turns a time on the system-audio track into the time on Kumospace's clock, which the speaker levels
+    /// use. The two start together, but a track that lost audio runs ahead from there on, and then the level
+    /// rows of one person sit under the words of the next. The levels and the track are the same sound, so the
+    /// lag is measured by matching them, piece by piece (<see cref="LagCurve"/>).</summary>
+    internal static Func<TimeSpan, TimeSpan> MeetingClock(SpeakerTimeline tl, float[]? loopEnv, string stamp)
+    {
+        if (loopEnv == null || loopEnv.Length == 0) return t => t;
+        int per = ClockBinMs / EchoGate.FrameMs;
+        var loop = new float[loopEnv.Length / per];
+        for (int i = 0; i < loop.Length; i++)
+        {
+            float loudest = float.MinValue;
+            for (int j = i * per; j < (i + 1) * per; j++) if (loopEnv[j] > loudest) loudest = loopEnv[j];
+            loop[i] = loudest;
+        }
+        // The level curve runs past the track's end: a track that lost audio is shorter than the meeting.
+        var curve = LagCurve.Measure(tl.RemoteCurve(ClockBinMs, loop.Length + MeetingToLoop.MaxSearch), loop, MeetingToLoop);
+        // One sample either way is the measure's own grain, and the name lookup already allows for it.
+        if (curve.Matched.Count == 0 || (Math.Abs(curve.MinLag) <= 1 && Math.Abs(curve.MaxLag) <= 1)) return t => t;
+        HuginnLog.Write($"meeting {stamp}: the system-audio track runs {-curve.Matched[0].Lag * ClockBinMs} ms ahead of Kumospace at the start, " +
+                        $"{-curve.Matched[^1].Lag * ClockBinMs} ms at the end ({curve.Matched.Count} of {curve.Pieces} pieces matched)");
+        return t =>
+        {
+            int lag = curve.AtSecond((int)(t.TotalMilliseconds / ClockBinMs));
+            return Math.Abs(lag) <= 1 ? t : t - TimeSpan.FromMilliseconds(lag * (double)ClockBinMs);
+        };
     }
 
     /// <summary>Where a transcript lives: <c>{stamp}_{name}.txt</c> once the user has named the meeting, else the
@@ -262,7 +326,7 @@ internal static class MeetingProcessor
 
     /// <summary>Opens any WAV and returns a 16 kHz mono 16-bit WAV stream (downmix + resample as needed).
     /// The mic track is already 16 kHz mono so this is a near no-op for it.</summary>
-    private static MemoryStream OpenAsWhisperWav(string path)
+    internal static MemoryStream OpenAsWhisperWav(string path)
     {
         // WaveFileReader, not AudioFileReader: the tracks are always WAV, and AudioFileReader is Windows-only.
         using var reader = new WaveFileReader(path);

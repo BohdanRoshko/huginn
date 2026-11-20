@@ -7,11 +7,16 @@ namespace Huginn;
 ///
 /// 1. Silence: a segment whose mic level (80th percentile of its 10 ms frames) is below −65 dBFS holds no
 ///    speech; the line is a hallucination.
-/// 2. Echo: both tracks are reduced to 10 ms RMS envelopes in dB. One global lag between the tracks comes from
-///    the envelope cross-correlation over ±3 s (capture start skew plus the speaker path — it differs per
-///    recording and per device). A segment whose mic envelope correlates with the aligned loopback envelope
-///    above 0.45 (small local search, far side not silent) is the far side heard through the speakers.
-///    No confident lag (headphones, or a one-sided call) turns this gate off.
+/// 2. Echo: both tracks are reduced to 10 ms RMS envelopes in dB. The lag between the tracks (capture start skew
+///    plus the speaker path — it differs per recording and per device) is measured in 10 s pieces
+///    (<see cref="LagCurve"/>), because a track that lost audio runs ahead of the other from there on. A segment
+///    whose mic envelope correlates with the aligned loopback envelope above 0.45 (small local search, far side
+///    not silent) is the far side heard through the speakers. When few pieces match (headphones, or a one-sided
+///    call) this gate is off.
+///
+/// Between the two, when the meeting app reports the user's own level (Kumospace does): a segment in which it got
+/// nothing from the microphone is dropped, and a segment it heard the user speak in is not dropped for its
+/// envelope. If the far side is in that segment too, both spoke at once, and the words decide whose line it is.
 ///
 /// Measured on 2026-09-04_182520 (Bohdan on speakers, barely speaking): 326 Me lines → 78 silent + ~230 echo;
 /// the text pass took the rest, leaving the one genuine question. Envelopes, not samples: an hour of audio is
@@ -22,35 +27,75 @@ internal static class EchoGate
     public const int FrameMs = 10;
     private const int SampleRate = 16000;
     private const int FrameSamples = SampleRate * FrameMs / 1000;
-    private const int MaxLagFrames = 300;       // ±3 s
-    private const int LocalLagFrames = 8;       // ±80 ms around the global lag, per segment
+    private const int LocalLagFrames = 8;       // ±80 ms around the piece's lag, per segment
     private const int MinSegmentFrames = 30;    // 300 ms: shorter than this, the envelope says nothing
-    private const double MinLagConfidence = 0.30;
+    private const int MinMatchedPieces = 3;     // fewer than this, or under a fifth of the pieces: no echo here
+    private const double MinMatchedShare = 0.20;
     private const double EchoCorrelation = 0.45;
     private const float LoopSilenceDb = -55f;
     private const float MicSilenceDb = -65f;
 
-    /// <param name="Drop">Per Me segment, in order: true = not the user.</param>
-    public sealed record Verdict(bool[] Drop, int Silent, int Echo, int LagMs, double LagConfidence);
+    // 10 s pieces every 5 s; the first lag within ±3 s, then it may move 1 s per piece, at most 10 s after a gap.
+    private static readonly LagOptions MicToLoop = new(Window: 1000, Step: 500, FirstSearch: 300, NextSearch: 100, MaxSearch: 1000, SideOffset: 30);
 
-    public static Verdict Judge(IReadOnlyList<TranscriptSegment> me, float[]? micEnv, float[]? loopEnv)
+    /// <param name="Drop">Per Me segment, in order: true = not the user.</param>
+    /// <param name="Heard">Per Me segment: true = the meeting app heard the user talk then.</param>
+    /// <param name="Mixed">Per Me segment: true = the app heard the user AND the mic heard the far side, so both
+    /// spoke at once. The envelopes cannot say whose words Whisper wrote down; the caller decides by the words.</param>
+    /// <param name="Unheard">Dropped because the meeting app got nothing from the user's microphone then.</param>
+    /// <param name="LagMs">The lag at the start of the recording; <paramref name="LagEndMs"/> the lag at its end.</param>
+    /// <param name="Matched">How many of the <paramref name="Pieces"/> 10 s pieces showed the far side in the mic.</param>
+    public sealed record Verdict(bool[] Drop, bool[] Heard, bool[] Mixed, int Silent, int Unheard, int Echo, int LagMs, int LagEndMs, int Matched, int Pieces)
+    {
+        /// <summary>A time on the mic track as a time on the system-audio track.</summary>
+        public Func<TimeSpan, TimeSpan> ToLoop { get; init; } = t => t;
+    }
+
+    /// <param name="heard">What the meeting app says about a span of the system-audio track's clock: true = it
+    /// heard the user talk, false = it got nothing from the user's microphone, null = it cannot tell. The app
+    /// cancels the echo before it measures, so its word beats the envelopes: on 2026-11-20 a line where the user
+    /// and the far side spoke at once correlated with the far side and was dropped.</param>
+    public static Verdict Judge(IReadOnlyList<TranscriptSegment> me, float[]? micEnv, float[]? loopEnv,
+        Func<TimeSpan, TimeSpan, bool?>? heard = null)
     {
         var drop = new bool[me.Count];
-        if (micEnv == null || micEnv.Length == 0) return new Verdict(drop, 0, 0, 0, 0);
+        var sure = new bool[me.Count];
+        var mixed = new bool[me.Count];
+        if (micEnv == null || micEnv.Length == 0) return new Verdict(drop, sure, mixed, 0, 0, 0, 0, 0, 0, 0);
 
-        int silent = 0, echo = 0, lagFrames = 0;
-        double confidence = 0;
+        int silent = 0, unheard = 0, echo = 0;
         for (int i = 0; i < me.Count; i++)
             if (IsSilent(micEnv, me[i])) { drop[i] = true; silent++; }
 
-        if (loopEnv != null && loopEnv.Length > 0)
-        {
-            (lagFrames, confidence) = GlobalLag(micEnv, loopEnv);
-            if (confidence >= MinLagConfidence)
-                for (int i = 0; i < me.Count; i++)
-                    if (!drop[i] && Correlation(micEnv, loopEnv, me[i], lagFrames) >= EchoCorrelation) { drop[i] = true; echo++; }
-        }
-        return new Verdict(drop, silent, echo, lagFrames * FrameMs, confidence);
+        var curve = loopEnv != null && loopEnv.Length > 0 ? LagCurve.Measure(micEnv, loopEnv, MicToLoop) : LagCurve.None;
+        bool hearsFarSide = curve.Matched.Count >= MinMatchedPieces && curve.Matched.Count >= MinMatchedShare * curve.Pieces;
+
+        // The mic track can run ahead of the system-audio track too; this puts a mic time on that track's clock.
+        TimeSpan ToLoop(TimeSpan t) =>
+            hearsFarSide ? t + TimeSpan.FromMilliseconds(curve.At((int)(t.TotalMilliseconds / FrameMs)) * (double)FrameMs) : t;
+
+        if (heard != null)
+            for (int i = 0; i < me.Count; i++)
+            {
+                if (drop[i]) continue;
+                switch (heard(ToLoop(me[i].Start), ToLoop(me[i].Start) + (me[i].End - me[i].Start)))
+                {
+                    case true: sure[i] = true; break;
+                    case false: drop[i] = true; unheard++; break;
+                }
+            }
+
+        if (hearsFarSide)
+            for (int i = 0; i < me.Count; i++)
+            {
+                if (drop[i] || Correlation(micEnv, loopEnv!, me[i], curve) < EchoCorrelation) continue;
+                if (sure[i]) mixed[i] = true;
+                else { drop[i] = true; echo++; }
+            }
+
+        int first = curve.Matched.Count > 0 ? curve.Matched[0].Lag * FrameMs : 0;
+        int end = curve.Matched.Count > 0 ? curve.Matched[^1].Lag * FrameMs : 0;
+        return new Verdict(drop, sure, mixed, silent, unheard, echo, first, end, curve.Matched.Count, curve.Pieces) { ToLoop = ToLoop };
     }
 
     /// <summary>10 ms RMS envelope in dBFS of a 16 kHz mono 16-bit WAV (any chunk layout; the stream is read
@@ -89,25 +134,6 @@ internal static class EchoGate
         return Array.Empty<float>();
     }
 
-    /// <summary>Lag (in frames) at which the loopback envelope best matches the mic envelope, and how well.
-    /// Positive: the loopback's content is later than the mic's (loop time = mic time + lag).</summary>
-    public static (int lagFrames, double correlation) GlobalLag(float[] mic, float[] loop)
-    {
-        int n = Math.Min(mic.Length, loop.Length);
-        if (n < MinSegmentFrames * 10) return (0, 0);
-        int bestLag = 0;
-        double best = -1;
-        for (int k = -MaxLagFrames; k <= MaxLagFrames; k++)
-        {
-            int len = n - Math.Abs(k);
-            if (len < MinSegmentFrames * 10) continue;
-            int mo = k >= 0 ? 0 : -k, lo = k >= 0 ? k : 0;
-            double c = Pearson(mic, mo, loop, lo, len);
-            if (c > best) { best = c; bestLag = k; }
-        }
-        return (bestLag, best);
-    }
-
     private static bool IsSilent(float[] micEnv, TranscriptSegment seg)
     {
         var (f0, f1) = Frames(seg, micEnv.Length);
@@ -118,21 +144,22 @@ internal static class EchoGate
         return span[(int)(span.Length * 0.8)] < MicSilenceDb;
     }
 
-    private static double Correlation(float[] micEnv, float[] loopEnv, TranscriptSegment seg, int lagFrames)
+    private static double Correlation(float[] micEnv, float[] loopEnv, TranscriptSegment seg, LagCurve curve)
     {
         var (f0, f1) = Frames(seg, micEnv.Length);
         int len = f1 - f0;
         if (len < MinSegmentFrames) return 0;
         double best = 0;
-        for (int k = -LocalLagFrames; k <= LocalLagFrames; k++)
-        {
-            int l0 = f0 + lagFrames + k;
-            if (l0 < 0 || l0 + len > loopEnv.Length) continue;
-            float loudest = float.MinValue;
-            for (int i = l0; i < l0 + len; i++) if (loopEnv[i] > loudest) loudest = loopEnv[i];
-            if (loudest < LoopSilenceDb) continue;
-            best = Math.Max(best, Pearson(micEnv, f0, loopEnv, l0, len));
-        }
+        foreach (int lagFrames in curve.Around((f0 + f1) / 2))
+            for (int k = -LocalLagFrames; k <= LocalLagFrames; k++)
+            {
+                int l0 = f0 + lagFrames + k;
+                if (l0 < 0 || l0 + len > loopEnv.Length) continue;
+                float loudest = float.MinValue;
+                for (int i = l0; i < l0 + len; i++) if (loopEnv[i] > loudest) loudest = loopEnv[i];
+                if (loudest < LoopSilenceDb) continue;
+                best = Math.Max(best, LagCurve.Pearson(micEnv, f0, loopEnv, l0, len));
+            }
         return best;
     }
 
@@ -143,18 +170,4 @@ internal static class EchoGate
         return (f0, f1);
     }
 
-    private static double Pearson(float[] a, int ao, float[] b, int bo, int len)
-    {
-        double ma = 0, mb = 0;
-        for (int i = 0; i < len; i++) { ma += a[ao + i]; mb += b[bo + i]; }
-        ma /= len; mb /= len;
-        double sab = 0, saa = 0, sbb = 0;
-        for (int i = 0; i < len; i++)
-        {
-            double da = a[ao + i] - ma, db = b[bo + i] - mb;
-            sab += da * db; saa += da * da; sbb += db * db;
-        }
-        double d = Math.Sqrt(saa * sbb);
-        return d > 0 ? sab / d : 0;
-    }
 }

@@ -95,6 +95,26 @@ internal static class TranscriptReconciler
         return new Result(sb.ToString().TrimEnd() + "\n", removed, meCount, themCount);
     }
 
+    /// <summary>Whose words are these? For a mic line recorded while the user and the far side spoke at once, when
+    /// the audio cannot say which voice Whisper wrote down. The line is theirs when more than half of its word
+    /// pairs, in order, are in what they said up to then (<paramref name="themUpToThen"/>: an echo cannot come
+    /// before its source). Pairs, not single words: "most of it is" shares every word with a long sentence of
+    /// theirs and no pair. A one-word line is theirs only when they said just that word.</summary>
+    public static bool SaidByThem(string me, IEnumerable<string> themUpToThen)
+    {
+        var mine = Tokenize(me);
+        if (mine.Length == 0) return false;
+        var theirs = themUpToThen.Select(Tokenize).ToList();
+        if (mine.Length == 1) return theirs.Any(t => t.Length <= 2 && t.Contains(mine[0]));
+        var pairs = new HashSet<(string, string)>();
+        foreach (var t in theirs)
+            for (int j = 0; j + 1 < t.Length; j++) pairs.Add((t[j], t[j + 1]));
+        int hit = 0;
+        for (int j = 0; j + 1 < mine.Length; j++)
+            if (pairs.Contains((mine[j], mine[j + 1]))) hit++;
+        return hit > 0.5 * (mine.Length - 1);
+    }
+
     private const int ShortLineWords = 4;             // fewer distinct words → the conservative single-line rule
     private const int ContentWordLen = 5;             // a word this long is "content", not filler ("the","that","just")
     private const double VerbatimContainment = 0.90;  // almost every word was theirs → echo, no further questions

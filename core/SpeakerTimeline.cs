@@ -24,6 +24,7 @@ internal sealed class SpeakerTimeline
     public List<object[]> Events { get; set; } = new();
 
     private readonly List<(long T, string Name, double Level)> _remote = new();
+    private readonly List<(long T, double Level)> _local = new();
 
     public static string PathFor(string stamp) => Path.Combine(Paths.MeetingsDir(), $"{stamp}_speakers.json");
 
@@ -94,7 +95,9 @@ internal sealed class SpeakerTimeline
         foreach (var (t, level) in snap.Local)
         {
             long off = t - StartUnixMs;
-            if (off >= -2000) Local.Add(new object[] { off, level });
+            if (off < -2000) continue;
+            _local.Add((off, level));
+            Local.Add(new object[] { off, level });
         }
     }
 
@@ -125,6 +128,13 @@ internal sealed class SpeakerTimeline
             };
             foreach (var row in r.GetProperty("Remote").EnumerateArray())
                 tl._remote.Add((row[0].GetInt64(), row[1].GetString() ?? "", row[2].GetDouble()));
+            if (r.TryGetProperty("Local", out var mine) && mine.ValueKind == JsonValueKind.Array)
+                foreach (var row in mine.EnumerateArray())
+                    if (row.GetArrayLength() >= 2)
+                    {
+                        tl._local.Add((row[0].GetInt64(), row[1].GetDouble()));
+                        tl.Local.Add(new object[] { row[0].GetInt64(), row[1].GetDouble() });
+                    }
             if (r.TryGetProperty("Events", out var evs) && evs.ValueKind == JsonValueKind.Array)
                 foreach (var row in evs.EnumerateArray())
                     if (row.GetArrayLength() >= 4)
@@ -138,22 +148,72 @@ internal sealed class SpeakerTimeline
         }
     }
 
-    /// <summary>The person talking during [start, end] of the recording: the one with the most speech energy in that
-    /// span (±300 ms for timestamp drift). Two names when the second has at least 60% of the first's. Null when
-    /// nobody Kumospace heard was talking then.</summary>
+    /// <summary>The person talking during [start, end] of the meeting (times on Kumospace's clock, from the recording
+    /// start): the one with the most speech energy in that span (±300 ms). Two names when the second has at least
+    /// 60% of the first's. A quiet word still has a speaker: when nobody reached the talk level, the one person
+    /// with clearly the most level under it. Null when nobody Kumospace heard was talking then.</summary>
     public string? SpeakerFor(TimeSpan start, TimeSpan end, double talkLevel)
     {
         long a = (long)start.TotalMilliseconds - 300, b = (long)end.TotalMilliseconds + 300;
+        double quietLevel = talkLevel / 3;
         var score = new Dictionary<string, double>();
+        var quiet = new Dictionary<string, (double Sum, int Rows)>();
         foreach (var (t, name, level) in _remote)
         {
-            if (t < a || t > b || level < talkLevel) continue;
-            score[name] = score.GetValueOrDefault(name) + level;
+            if (t < a || t > b || level < quietLevel) continue;
+            var q = quiet.GetValueOrDefault(name);
+            quiet[name] = (q.Sum + level, q.Rows + 1);
+            if (level >= talkLevel) score[name] = score.GetValueOrDefault(name) + level;
         }
-        if (score.Count == 0) return null;
+        if (score.Count == 0)
+        {
+            var low = quiet.OrderByDescending(kv => kv.Value.Sum).ToList();
+            bool clear = low.Count > 0 && low[0].Value.Rows >= 2 && (low.Count == 1 || low[1].Value.Sum < 0.6 * low[0].Value.Sum);
+            return clear ? low[0].Key : null;
+        }
         var ranked = score.OrderByDescending(kv => kv.Value).ToList();
         if (ranked.Count > 1 && ranked[1].Value >= 0.6 * ranked[0].Value) return $"{ranked[0].Key} / {ranked[1].Key}";
         return ranked[0].Key;
+    }
+
+    /// <summary>Did Kumospace hear me talk during [start, end] (its clock, from the recording start)? It measures
+    /// my microphone after it has cancelled the echo of the others, so this tells my voice from theirs in the
+    /// mic track. True: my level was at the talk level for at least a quarter of the span. False: it got nothing from
+    /// my microphone within a second of the span (muted, or silent). Null: in between, or this recording has no
+    /// level of mine at all (muted throughout, or not a Kumospace meeting), so it cannot tell.</summary>
+    public bool? HeardMe(TimeSpan start, TimeSpan end, double talkLevel)
+    {
+        if (_local.Count == 0) return null;
+        long a = (long)start.TotalMilliseconds, b = (long)end.TotalMilliseconds;
+        bool any = false;
+        var talking = new HashSet<long>();
+        foreach (var (t, level) in _local)
+        {
+            if (t >= a - 1000 && t <= b + 1000) any = true;
+            if (level >= talkLevel && t >= a - LevelStepMs && t <= b + LevelStepMs) talking.Add(t / LevelStepMs);
+        }
+        if (!any) return false;
+        return talking.Count >= 0.25 * Math.Max(1.0, (b - a) / (double)LevelStepMs) ? true : null;
+    }
+
+    private const int LevelStepMs = 200; // Kumospace's level samples come every 200 ms
+
+    /// <summary>The loudest remote level in each <paramref name="binMs"/> of the meeting, in dB (−60 = nobody), as a
+    /// curve of <paramref name="bins"/> points. It is the same sound as the system-audio track, so the two can be
+    /// matched to find where that track's clock left Kumospace's.</summary>
+    public float[] RemoteCurve(int binMs, int bins)
+    {
+        var curve = new float[bins];
+        Array.Fill(curve, -60f);
+        foreach (var (t, _, level) in _remote)
+        {
+            if (t < 0) continue;
+            long bin = t / binMs;
+            if (bin >= bins) continue;
+            float db = (float)(20 * Math.Log10(level + 0.001));
+            if (db > curve[bin]) curve[bin] = db;
+        }
+        return curve;
     }
 
     /// <summary>A one-line summary for the log: rows, people, and the level spread (to tune the talk level).</summary>

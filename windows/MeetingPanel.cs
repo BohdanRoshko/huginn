@@ -129,13 +129,13 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
     // ---- layout ----
     // The header: Huginn's tile and the Record pill, both 24 px tall on the same line (Bohdan, 2026-11-20).
-    private Rectangle IconTile => new(14, 8, 24, 24);
+    private Rectangle IconTile => new(14, 7, 24, 24); // 6 px of room above (inside the 1 px edge) and 6 px to the meter well
     private Rectangle Pill => _recording
-        ? new Rectangle(Width - 14 - 72, 8, 72, 24)
-        : new Rectangle(Width - 14 - 88, 8, 88, 24);
+        ? new Rectangle(Width - 14 - 72, 7, 72, 24)
+        : new Rectangle(Width - 14 - 88, 7, 88, 24);
     /// <summary>The discard (trash) button — only while recording; sits left of the Stop pill. Icon-sized so
     /// it never collides with the elapsed-time header text.</summary>
-    private Rectangle TrashRect => new(Width - 14 - 72 - 8 - 24, 8, 24, 24);
+    private Rectangle TrashRect => new(Width - 14 - 72 - 8 - 24, 7, 24, 24);
 
     // ---- public API ----
     public void ShowPanel() => Ui(() => { if (!Visible) { RestorePosition(); Show(); } Raise(); });
@@ -233,6 +233,9 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
     private void DrawHeader(Graphics g)
     {
+        // Shapes in GDI+ land half a pixel low here; shifting them back puts the tile and the pill on whole pixel
+        // rows, so the 6 px above them and the 6 px under them to the meter well are equal (measured 2026-11-20).
+        g.TranslateTransform(-0.5f, -0.5f);
         // Huginn's tile, the same one the meeting pop-up shows: white, with the waveform in ink.
         using (var tile = new SolidBrush(Color.FromArgb(236, 236, 236)))
         using (var tp = Rounded(IconTile, 6)) g.FillPath(tile, tp);
@@ -260,6 +263,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
 
         DrawActionPill(g, Pill, _recording);
         if (_recording) DrawTrash(g, TrashRect, _discardHover, _discardArmed);
+        g.ResetTransform();
     }
 
     // The discard (trash) button: ghost while idle-armed=false; red-filled once ARMED (first click) so the

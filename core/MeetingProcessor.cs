@@ -280,8 +280,13 @@ internal static class MeetingProcessor
             if (!lines[i].StartsWith("# Tracks:")) continue;
             var where = tl.Rooms.Count > 0 ? string.Join(", ", tl.Rooms) : "outside a room";
             var people = tl.People.Count > 0 ? string.Join(", ", tl.People) : "nobody recorded";
-            lines[i] = $"# Kumospace: {where} · with {people}\n"
-                     + $"# Speakers: Me = {tl.Me ?? (Settings.UserName.Length > 0 ? Settings.UserName.Replace(".", " ").Trim() : "the microphone")}. A named line is the person Kumospace heard talking then. \"Them\" = no clear speaker.";
+            var me = tl.Me ?? (Settings.UserName.Length > 0 ? Settings.UserName.Replace(".", " ").Trim() : "the microphone");
+            // Another app's talk samples (Meet) have no rooms, and the app shows who talks; it does not hear them.
+            lines[i] = tl.App == null
+                ? $"# Kumospace: {where} · with {people}\n"
+                + $"# Speakers: Me = {me}. A named line is the person Kumospace heard talking then. \"Them\" = no clear speaker."
+                : $"# {tl.App}: with {people}\n"
+                + $"# Speakers: Me = {me}. A named line is the person {tl.App} showed talking then. \"Them\" = no clear speaker.";
             break;
         }
         return string.Join("\n", lines);

@@ -39,10 +39,31 @@ internal sealed class SpeakerTimeline
         catch { return Array.Empty<string>(); }
     }
 
+    /// <summary>The app the talk samples came from when it is not Kumospace ("Google Meet"); null for Kumospace.</summary>
+    public string? App { get; set; }
+
     public bool HasContent => HasKumospace || Events.Count > 0;
 
-    /// <summary>Kumospace heard or placed people in this recording, so its lines can be named.</summary>
+    /// <summary>The meeting app heard or placed people in this recording (Kumospace's levels, or the talk samples
+    /// of another app), so its lines can be named.</summary>
     public bool HasKumospace => Rooms.Count > 0 || People.Count > 0 || Remote.Count > 0;
+
+    /// <summary>The level a talk sample gets when its app says only "talking", not how loud: well above any talk level.</summary>
+    public const double TalkSampleLevel = 0.1;
+
+    /// <summary>One sample of "this person is talking now" from an app that shows it on its page (the Meet
+    /// extension reads the mark on each person's tile five times a second), at a wall-clock time. It lands in the
+    /// same rows as Kumospace's levels, so the same lookup names the lines.</summary>
+    public void AddTalk(string app, string who, long unixMs)
+    {
+        long off = unixMs - StartUnixMs;
+        who = who.Trim();
+        if (off < -2000 || who.Length == 0) return;
+        App = app;
+        if (!People.Contains(who)) People.Add(who);
+        _remote.Add((off, who, TalkSampleLevel));
+        Remote.Add(new object[] { off, who, TalkSampleLevel });
+    }
 
     /// <summary>One thing someone did, from any source (the Meet extension), at a wall-clock time.</summary>
     public void AddEvent(KumoEvent e)
@@ -123,6 +144,7 @@ internal sealed class SpeakerTimeline
             {
                 StartUnixMs = r.GetProperty("StartUnixMs").GetInt64(),
                 Me = r.TryGetProperty("Me", out var me) && me.ValueKind == JsonValueKind.String ? me.GetString() : null,
+                App = r.TryGetProperty("App", out var app) && app.ValueKind == JsonValueKind.String ? app.GetString() : null,
                 Rooms = r.GetProperty("Rooms").EnumerateArray().Select(x => x.GetString() ?? "").ToList(),
                 People = r.GetProperty("People").EnumerateArray().Select(x => x.GetString() ?? "").ToList(),
             };

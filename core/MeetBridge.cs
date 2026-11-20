@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace Huginn;
 
 /// <summary>
-/// Takes what the Huginn browser extension sees in a Google Meet call (hands, reactions, chat) over a tiny HTTP
+/// Takes what the Huginn browser extension sees in a Google Meet call (who is talking, hands, reactions, chat) over a tiny HTTP
 /// listener on 127.0.0.1. The extension's background worker POSTs <c>/meet/events</c> with the header
 /// <c>X-Huginn: 1</c>; a web page cannot send that header to another origin without a CORS preflight, and this
 /// listener never answers one, so no page can write into a transcript. Nothing else is served.
@@ -100,7 +100,9 @@ internal sealed class MeetBridge : IDisposable
                 {
                     if (!e.TryGetProperty("t", out var t) || !t.TryGetInt64(out var ms)) continue;
                     var kind = Str(e, "kind");
-                    if (kind is not ("react" or "hand-up" or "hand-down" or "chat" or "share-start" or "share-stop")) continue;
+                    // "talk": this person is talking now (a sample, five a second). "note": the extension's own
+                    // remark about the page, for the log.
+                    if (kind is not ("react" or "hand-up" or "hand-down" or "chat" or "share-start" or "share-stop" or "talk" or "note")) continue;
                     list.Add(new KumoEvent(ms, kind, Clip(Str(e, "who"), 120), Clip(Str(e, "text"), 4000)));
                 }
         }

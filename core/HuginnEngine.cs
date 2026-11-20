@@ -1075,12 +1075,30 @@ internal sealed class HuginnEngine : IAsyncDisposable
 
     private const string KumoSource = "Kumospace";
 
-    // Hands, reactions and chat from a Google Meet call (the browser extension). Kept only while recording.
+    // Who is talking, hands, reactions and chat from a Google Meet call (the browser extension). Kept only while recording.
     private void OnMeetEvents(string meeting, IReadOnlyList<KumoEvent> events)
     {
         bool keep = _p.Meeting.IsRecording && _timeline != null;
-        HuginnLog.Write($"meet {meeting}: {string.Join(", ", events.Select(e => e.Kind))}{(keep ? "" : " (not recording, dropped)")}");
-        if (keep) foreach (var e in events) _timeline!.AddEvent(e);
+        foreach (var note in events.Where(e => e.Kind == "note")) HuginnLog.Write($"meet {meeting}: {note.Text}");
+
+        // Talk samples name the lines. They come five a second, so the log gets one line per person, not one per sample.
+        // A Kumospace recording has Kumospace's own levels; a Meet tab open beside it must not name its lines.
+        // The system-audio track never holds my own voice, so a sample under my own name names nothing.
+        var mine = Settings.UserName.Trim();
+        var talk = events.Where(e => e.Kind == "talk" && e.Who.Trim().Length > 0
+            && !e.Who.Trim().Equals("Me", StringComparison.OrdinalIgnoreCase)
+            && !(mine.Length > 0 && e.Who.Trim().Equals(mine, StringComparison.OrdinalIgnoreCase))).ToList();
+        if (talk.Count > 0 && keep && _source != KumoSource)
+            foreach (var e in talk)
+            {
+                if (!_timeline!.People.Contains(e.Who.Trim())) HuginnLog.Write($"meet {meeting}: {e.Who.Trim()} is talking (the first time in this recording)");
+                _timeline.AddTalk(_source ?? "Google Meet", e.Who, e.T);
+            }
+
+        var rest = events.Where(e => e.Kind is not ("talk" or "note")).ToList();
+        if (rest.Count == 0) return;
+        HuginnLog.Write($"meet {meeting}: {string.Join(", ", rest.Select(e => e.Kind))}{(keep ? "" : " (not recording, dropped)")}");
+        if (keep) foreach (var e in rest) _timeline!.AddEvent(e);
     }
 
     // A Kumospace meeting starts recording (automatically or from the pop-up); the detector then owns its stop.

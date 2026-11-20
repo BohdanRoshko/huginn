@@ -6,6 +6,12 @@
   "use strict";
   const ICONS = ".google-symbols, .material-icons-extended, .material-symbols-outlined";
   const SELF_NAME = ".awLEm"; // the signed-in user's name in the call (as of 2026-11)
+  // The sound mark on a person's tile: the three small bars. It carries TALK_QUIET while the person is silent and
+  // loses it while Meet hears them (as of 2026-11; both are Meet's own generated names, so the first thing to check
+  // when names stop coming is the "[huginn] talk mark" lines in the console and Huginn's log).
+  const TALK_MARK = '[jsname="QgSmzd"]';
+  const TALK_QUIET = "gjg47c";
+  const TALK_EVERY_MS = 200;
   const CHAT_REGION = 'div[aria-live="polite"].Ge9Kpc'; // the chat message list (as of 2026-11)
   const queue = [];
   let inCall = false;
@@ -51,6 +57,7 @@
       inCall = now;
       log(inCall ? "joined" : "left", meeting());
       if (!inCall) { hands.clear(); stopChat(); chatOpens = 0; }
+      talkers.clear(); markStates.clear(); markSeenAt = 0; markMissingSince = 0; markMissingSaid = false;
     }
     if (inCall) {
       selfName = selfName || document.querySelector(SELF_NAME)?.textContent?.trim() || selfTileName() || accountName();
@@ -60,6 +67,57 @@
     for (const [k, t] of recent) if (Date.now() - t > 60000) recent.delete(k);
     flush();
   }, 1000);
+
+  // ---- who is talking: the sound mark on each person's tile, read five times a second. Huginn puts the name of
+  //      whoever talked on each line of the system audio. My own tile is skipped: my voice is the microphone track.
+  //      Only tiles on screen are known; a person Meet does not show has no mark to read. ----
+  const talkers = new Set(); // names already seen talking in this call, for one console line each
+  const markStates = new Set(); // class lists seen on the mark, passed on once each so a change by Google can be read from the log
+  let markSeenAt = 0, markMissingSince = 0, markMissingSaid = false;
+
+  const onScreen = (el) => el.getClientRects().length > 0;
+
+  function scanTalk() {
+    if (!inCall) return;
+    const now = Date.now();
+    const talking = new Set();
+    let others = 0, marks = 0;
+    for (const tile of document.querySelectorAll("[data-participant-id]")) {
+      if (isSelfTile(tile) || !onScreen(tile)) continue;
+      const name = tileName(tile);
+      if (!name || /^you$/i.test(name) || (selfName && name === selfName)) continue;
+      others++;
+      const mark = tile.querySelector(TALK_MARK);
+      if (!mark || !onScreen(mark)) continue; // muted: Meet shows a crossed microphone in place of the bars
+      marks++;
+      const state = [...mark.classList].sort().join(" ");
+      if (!markStates.has(state) && markStates.size < 12) {
+        markStates.add(state);
+        note(`talk mark classes: "${state}"${mark.classList.contains(TALK_QUIET) ? " (quiet)" : " (talking)"}`);
+      }
+      if (!mark.classList.contains(TALK_QUIET)) talking.add(name);
+    }
+    for (const name of talking) {
+      queue.push({ t: now, kind: "talk", who: name, text: "" });
+      if (!talkers.has(name)) { talkers.add(name); log("talk", name); }
+    }
+    // Nobody unmuted is not a fault; other people on screen for a minute with no mark on any tile is.
+    if (marks > 0) { markSeenAt = now; markMissingSince = 0; }
+    else if (others > 0 && !markSeenAt) {
+      markMissingSince = markMissingSince || now;
+      if (!markMissingSaid && now - markMissingSince > 60000) {
+        markMissingSaid = true;
+        note(`talk mark not found on ${others} tile(s) for a minute: either everyone is muted or Meet changed ${TALK_MARK}`);
+      }
+    }
+  }
+  setInterval(scanTalk, TALK_EVERY_MS);
+
+  // A remark about the page itself, for Huginn's log.
+  function note(text) {
+    queue.push({ t: Date.now(), kind: "note", who: "", text });
+    log("note", text);
+  }
 
   // ---- raised hands: mine from the hand button ("Lower hand" while it is up), others' from the "front_hand" icon on
   //      their tile (both seen in a call, 2026-11-20), plus Meet's spoken announcements ----

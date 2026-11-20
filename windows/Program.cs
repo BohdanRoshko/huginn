@@ -19,6 +19,16 @@ internal static class Program
             return;
         }
 
+        // `Huginn.exe --preview-notes`: only the notes pad, for checking its look; the running Huginn is untouched.
+        if (args.Contains("--preview-notes"))
+        {
+            ApplicationConfiguration.Initialize();
+            var notes = new NotesPanel();
+            notes.FormClosed += (_, _) => Application.Exit();
+            notes.ShowPanel();
+            Application.Run(notes);
+            return;
+        }
         // `Huginn.exe --preview-meeting <stamp> [<stamp> …]`: only the meeting window with those recordings as tabs,
         // for checking its look; the running Huginn is untouched.
         int at = Array.IndexOf(args, "--preview-meeting");

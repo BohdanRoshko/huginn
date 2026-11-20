@@ -34,6 +34,12 @@ internal sealed class MeetingRecorder : IMeetingRecorder
     private string _micPath = "", _loopPath = "";
     private volatile bool _recording;
 
+    // Both tracks are kept on one clock that starts at the plan's start time (see TrackClock).
+    private readonly System.Diagnostics.Stopwatch _clock = new();
+    private TimeSpan _clockOffset, _stoppedAt;
+    private TrackClock? _micClock, _loopClock;
+    private static readonly byte[] Silence = new byte[64 * 1024];
+
     public bool IsRecording => _recording;
     private MeetingCapture? _plan;
 
@@ -56,12 +62,19 @@ internal sealed class MeetingRecorder : IMeetingRecorder
         _mic = new WaveInEvent { DeviceNumber = device, WaveFormat = WhisperFormat, BufferMilliseconds = 100 };
         _micWriter = new WaveFileWriter(_micPath, WhisperFormat);
         _mic.DataAvailable += OnMicData;
-        _mic.RecordingStopped += (_, _) => { lock (_lock) { _micWriter?.Dispose(); _micWriter = null; } _micStopped.TrySetResult(); };
+        _mic.RecordingStopped += (_, _) => { lock (_lock) { Close(ref _micWriter, _micClock); } _micStopped.TrySetResult(); };
 
         _loop = new WasapiLoopbackCapture();
         _loopWriter = new WaveFileWriter(_loopPath, _loop.WaveFormat);
         _loop.DataAvailable += OnLoopData;
-        _loop.RecordingStopped += (_, _) => { lock (_lock) { _loopWriter?.Dispose(); _loopWriter = null; } _loopStopped.TrySetResult(); };
+        _loop.RecordingStopped += (_, _) => { lock (_lock) { Close(ref _loopWriter, _loopClock); } _loopStopped.TrySetResult(); };
+
+        _micClock = new TrackClock(WhisperFormat.AverageBytesPerSecond, WhisperFormat.BlockAlign);
+        _loopClock = new TrackClock(_loop.WaveFormat.AverageBytesPerSecond, _loop.WaveFormat.BlockAlign);
+        var sinceStart = DateTime.Now - plan.StartedLocal;
+        _clockOffset = sinceStart > TimeSpan.Zero && sinceStart < TimeSpan.FromSeconds(10) ? sinceStart : TimeSpan.Zero;
+        _stoppedAt = TimeSpan.Zero;
+        _clock.Restart();
 
         _recording = true;
         try
@@ -80,15 +93,39 @@ internal sealed class MeetingRecorder : IMeetingRecorder
 
     private void OnMicData(object? sender, WaveInEventArgs e)
     {
-        lock (_lock) { _micWriter?.Write(e.Buffer, 0, e.BytesRecorded); }
+        lock (_lock) { WriteOnClock(_micWriter, _micClock, e.Buffer, e.BytesRecorded); }
         RaiseLevel(e.Buffer, e.BytesRecorded, WhisperFormat);
     }
 
     private void OnLoopData(object? sender, WaveInEventArgs e)
     {
-        lock (_lock) { _loopWriter?.Write(e.Buffer, 0, e.BytesRecorded); }
+        lock (_lock) { WriteOnClock(_loopWriter, _loopClock, e.Buffer, e.BytesRecorded); }
         var fmt = _loop?.WaveFormat;
         if (fmt != null) RaiseLevel(e.Buffer, e.BytesRecorded, fmt);
+    }
+
+    // Audio that never arrived becomes silence of the same length, so what comes after it keeps its time.
+    private void WriteOnClock(WaveFileWriter? writer, TrackClock? clock, byte[] buffer, int count)
+    {
+        if (writer == null) return;
+        if (clock != null) WriteSilence(writer, clock.SilenceBefore(_clockOffset + _clock.Elapsed, count));
+        writer.Write(buffer, 0, count);
+    }
+
+    private static void WriteSilence(WaveFileWriter writer, long bytes)
+    {
+        for (; bytes > 0; bytes -= Math.Min(bytes, Silence.Length))
+            writer.Write(Silence, 0, (int)Math.Min(bytes, Silence.Length));
+    }
+
+    // Brings the track to the length of the recording (the speakers may have been silent at the end), then closes it.
+    private void Close(ref WaveFileWriter? writer, TrackClock? clock)
+    {
+        if (writer == null) return;
+        try { if (clock != null && _stoppedAt > TimeSpan.Zero) WriteSilence(writer, clock.SilenceAtEnd(_stoppedAt)); }
+        catch (Exception ex) { HuginnLog.Write("meeting: could not pad a track's end", ex); }
+        writer.Dispose();
+        writer = null;
     }
 
     private void RaiseLevel(byte[] buf, int count, WaveFormat fmt)
@@ -127,6 +164,7 @@ internal sealed class MeetingRecorder : IMeetingRecorder
     {
         if (!_recording) return;
         _recording = false;
+        _stoppedAt = _clockOffset + _clock.Elapsed;
         try { _mic?.StopRecording(); } catch { _micStopped.TrySetResult(); }
         try { _loop?.StopRecording(); } catch { _loopStopped.TrySetResult(); }
     }
@@ -144,6 +182,10 @@ internal sealed class MeetingRecorder : IMeetingRecorder
             _mic?.Dispose(); _mic = null;
             _loop?.Dispose(); _loop = null;
         }
+        if (_plan != null && (_micClock?.Gaps > 0 || _loopClock?.Gaps > 0))
+            HuginnLog.Write($"meeting {_plan.Stamp}: audio that did not arrive was filled with silence: " +
+                            $"microphone {_micClock?.Padded.TotalSeconds:F1} s in {_micClock?.Gaps} place(s), " +
+                            $"system audio {_loopClock?.Padded.TotalSeconds:F1} s in {_loopClock?.Gaps} place(s)");
         return _plan;
     }
 

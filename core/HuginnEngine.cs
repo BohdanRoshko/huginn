@@ -730,8 +730,10 @@ internal sealed class HuginnEngine : IAsyncDisposable
                 catch (Exception ex)
                 {
                     HuginnLog.Write($"meeting {cap.Stamp}: Odin filing failed", ex);
-                    Recent.SetStatus(jobId, "Saved · Odin offline", JobTone.Warn, cancelable: false);
-                    Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "Saved · Odin offline"));
+                    // The row looks like any saved meeting: it has its local name, and Odin is never named on it
+                    // (Bohdan, 2026-11-20). The notice below is the one place the failure shows.
+                    Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
+                    Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
                     _shell.Warn("Huginn — Odin not reachable", $"Saved the transcript to disk; file it later.\n{Path.GetFileName(r.TranscriptPath)}");
                     _shell.Reveal(Recent.TranscriptPathFor(cap.Stamp) ?? r.TranscriptPath);
                 }

@@ -233,3 +233,18 @@ public class RecentMeetingsTests
         Assert.False(File.Exists(original));
     }
 }
+
+/// <summary>The recorder panel's status chips.</summary>
+public class StatusChipsTests
+{
+    [Fact]
+    public void TaskCountComesFirstAndOnlyWithOdin()
+    {
+        Assert.Equal(new[] { "3 tasks", "internal-dev" }, RecentMeetings.StatusChips("✓ internal-dev · 3 task(s)", withTasks: true));
+        Assert.Equal(new[] { "internal-dev" }, RecentMeetings.StatusChips("✓ internal-dev · 1 task(s)", withTasks: false));
+    }
+
+    [Fact]
+    public void OdinOfflineNeverShows() =>
+        Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · Odin offline", withTasks: true));
+}

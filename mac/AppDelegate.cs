@@ -287,10 +287,12 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         m.AddItem(Item("Quit Huginn", Quit, "q"));
     }
 
-    private static string JobTitle(RecentMeeting job)
+    // The status as the recorder panel's chips say it, so "Odin offline" never shows here either.
+    private string JobTitle(RecentMeeting job)
     {
         var name = string.IsNullOrWhiteSpace(job.Title) ? job.Started.ToString("MMM d, h:mm tt") : job.Title!;
-        return $"{name} — {job.Status}";
+        var status = string.Join(" · ", RecentMeetings.StatusChips(job.Status, _engine.HasOdin));
+        return status.Length == 0 ? name : $"{name} — {status}";
     }
 
     /// <summary>Per-meeting actions: a submenu, so Rename sits next to Open (as in the Swift app).</summary>

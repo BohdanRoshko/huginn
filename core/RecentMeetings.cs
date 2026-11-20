@@ -104,8 +104,8 @@ internal sealed class RecentMeetings
     public static string ResolveTranscript(RecentMeeting e) => e.Transcript ?? MeetingProcessor.TranscriptPathFor(e.Stamp, null);
 
     /// <summary>A row's status as the recorder panel's chips: "✓ internal-dev · 1 task(s)" → [1 task] [internal-dev], the
-    /// task count first and only when there is an Odin to make tasks (Bohdan, 2026-11-20); "Saved · Odin offline" →
-    /// [Saved] [Odin offline].</summary>
+    /// task count first and only when there is an Odin to make tasks (Bohdan, 2026-11-20). "Odin offline", from rows
+    /// saved before 2026-11-20, never shows: "Saved · Odin offline" → [Saved].</summary>
     public static IEnumerable<string> StatusChips(string status, bool withTasks)
     {
         var parts = new List<string>();
@@ -115,7 +115,7 @@ internal sealed class RecentMeetings
             var part = raw.TrimStart('✓', ' ');
             var tasks = System.Text.RegularExpressions.Regex.Match(part, @"^(\d+) task\(s\)$");
             if (tasks.Success) { taskChip = tasks.Groups[1].Value == "1" ? "1 task" : $"{tasks.Groups[1].Value} tasks"; continue; }
-            if (part.Length > 0) parts.Add(part);
+            if (part.Length > 0 && !part.Equals("Odin offline", StringComparison.OrdinalIgnoreCase)) parts.Add(part);
         }
         if (taskChip != null && withTasks) parts.Insert(0, taskChip);
         return parts;

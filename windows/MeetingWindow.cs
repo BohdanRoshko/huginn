@@ -18,6 +18,7 @@ internal sealed class MeetingWindow : Form
     private readonly WebView2 _web = new() { Dock = DockStyle.Fill, DefaultBackgroundColor = System.Drawing.Color.FromArgb(37, 37, 37) };
     private readonly List<string> _pending = new();
     private bool _ready;
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
     public MeetingWindow(System.Drawing.Rectangle near)
     {
@@ -64,6 +65,9 @@ internal sealed class MeetingWindow : Form
             core.Settings.AreDevToolsEnabled = false;
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.AreDefaultContextMenusEnabled = false;
+            // SmartScreen held every page load about 2 s before the page ran. The page is our own file, and any other
+            // address is cancelled below and opened in the browser, so there is nothing for it to check.
+            core.Settings.IsReputationCheckingRequired = false;
             // The page and the snapshots each get a made-up https host mapped to a folder on this computer.
             var pageDir = Paths.File("viewer");
             Directory.CreateDirectory(pageDir);
@@ -74,7 +78,7 @@ internal sealed class MeetingWindow : Form
             core.WebMessageReceived += (_, a) =>
             {
                 var msg = a.TryGetWebMessageAsString();
-                if (msg == "ready") { _ready = true; foreach (var j in _pending) Send(j); _pending.Clear(); }
+                if (msg == "ready") { HuginnLog.Write($"meeting window: page ready in {_clock.ElapsedMilliseconds} ms"); _ready = true; foreach (var j in _pending) Send(j); _pending.Clear(); }
                 else if (msg == "close") Close();
             };
             // Links inside a summary open in the browser, never in this window.

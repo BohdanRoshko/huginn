@@ -261,6 +261,9 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _notesRecordItem = new ToolStripMenuItem("Open when a recording starts", null, (_, _) => SetNotesMode("record"));
         notesMenu.DropDownItems.AddRange(new ToolStripItem[] { _notesOffItem, _notesAlwaysItem, _notesRecordItem });
         menu.Items.Add(notesMenu);
+        // The name a meeting summary lists the user's action items under (Bohdan, 2026-11-20).
+        _nameItem = new ToolStripMenuItem(NameItemText(), null, (_, _) => AskName());
+        menu.Items.Add(_nameItem);
         menu.Items.Add(new ToolStripSeparator());
         _recordingsItem = new ToolStripMenuItem("Recordings", null, (_, _) => { Directory.CreateDirectory(Paths.MeetingsDir()); OpenPath(Paths.MeetingsDir()); })
             { ToolTipText = "Open the recordings folder" };
@@ -269,6 +272,38 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         menu.Items.Add(new ToolStripMenuItem("Quit", null, (_, _) => ExitApp()));
         menu.Opening += (_, _) => Refresh();
         return menu;
+    }
+
+    private ToolStripMenuItem? _nameItem;
+
+    private static string NameItemText() => Settings.UserName.Length == 0 ? "Your name…" : $"Your name: {Settings.UserName}…";
+
+    // A small box for the name; empty is allowed (the summary then says "your action items").
+    private void AskName()
+    {
+        using var form = new Form
+        {
+            Text = "Your name",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterScreen,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            TopMost = true,
+            AutoScaleMode = AutoScaleMode.Dpi,
+            ClientSize = new Size(340, 118),
+        };
+        var label = new Label { Text = "Meeting summaries list your action items under this name.", Location = new Point(12, 12), AutoSize = true };
+        var box = new TextBox { Text = Settings.UserName, Location = new Point(12, 40), Width = 316 };
+        var ok = new Button { Text = "Save", DialogResult = DialogResult.OK, Location = new Point(172, 78), Width = 76 };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(252, 78), Width = 76 };
+        form.Controls.AddRange(new Control[] { label, box, ok, cancel });
+        form.AcceptButton = ok;
+        form.CancelButton = cancel;
+        if (form.ShowDialog() != DialogResult.OK) return;
+        Settings.UserName = box.Text;
+        if (_nameItem != null) _nameItem.Text = NameItemText();
+        HuginnLog.Write($"settings: user name {(Settings.UserName.Length == 0 ? "cleared" : "set")}");
     }
 
     private ToolStripMenuItem BuildMicMenu()

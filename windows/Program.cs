@@ -19,6 +19,20 @@ internal static class Program
             return;
         }
 
+        // `Huginn.exe --summarize <transcript> <out.md> [name]`: writes the local summary of one transcript, for checking
+        // what the model makes of a real meeting; the running Huginn is untouched.
+        int sum = Array.IndexOf(args, "--summarize");
+        if (sum >= 0 && args.Length > sum + 2)
+        {
+            var model = new Cleaner(Paths.CleanupModelPath());
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var md = MeetingSummary.MakeAsync(File.ReadAllText(args[sum + 1]), null, args.Length > sum + 3 ? args[sum + 3] : null, model)
+                .GetAwaiter().GetResult();
+            File.WriteAllText(args[sum + 2], (md ?? "(no summary)") + $"\n<!-- {sw.Elapsed:m\\:ss} -->\n");
+            model.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            return;
+        }
+
         // `Huginn.exe --preview-notes`: only the notes pad, for checking its look; the running Huginn is untouched.
         if (args.Contains("--preview-notes"))
         {

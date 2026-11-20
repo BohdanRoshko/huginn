@@ -36,16 +36,25 @@ internal sealed record MeetingView(
             }
             catch (Exception ex) { HuginnLog.Write($"meeting window: Odin's note {odinSlug} not read", ex); }
         }
-        // Without Odin, the lines typed in the notes pad while it recorded are the summary.
+        // Without Odin's summary: the one Huginn wrote here (MeetingSummary), then the lines typed in the notes pad
+        // while it recorded.
         if (summary == null)
         {
+            var parts = new List<string>();
+            var local = MeetingSummary.PathFor(row.Stamp);
+            if (File.Exists(local))
+            {
+                var md = (await File.ReadAllTextAsync(local).ConfigureAwait(false)).Trim();
+                if (md.Length > 0) parts.Add(md);
+            }
             var notesPath = Path.Combine(Paths.MeetingsDir(), $"{row.Stamp}_notes.md");
             if (File.Exists(notesPath))
             {
                 var notes = MeetingNotes.Read(notesPath);
                 if (!string.IsNullOrWhiteSpace(notes))
-                    summary = "## My notes\n\n" + string.Join("\n", notes.Split('\n').Where(l => l.Trim().Length > 0).Select(l => "- " + l.Trim()));
+                    parts.Add("## My notes\n\n" + string.Join("\n", notes.Split('\n').Where(l => l.Trim().Length > 0).Select(l => "- " + l.Trim())));
             }
+            if (parts.Count > 0) summary = string.Join("\n\n", parts);
         }
         var source = Regex.Match(transcript, @"^# Source:\s*(.+?)\s*$", RegexOptions.Multiline);
         return new MeetingView(

@@ -248,3 +248,54 @@ public class StatusChipsTests
     public void OdinOfflineNeverShows() =>
         Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · Odin offline", withTasks: true));
 }
+
+/// <summary>The local meeting summary: the model's tagged lines into markdown, without the model.</summary>
+public class MeetingSummaryTests
+{
+    private const string Speech = "Me: Hi.\nLeo Brandt: I can take the vendor page this week.\nThem: Sounds good.\n";
+
+    [Fact]
+    public void TaggedLinesBecomeSectionsUnderTheName()
+    {
+        var n = MeetingSummary.Parse("OVERVIEW: The team reviewed the sprint.\nOVERVIEW: Again.\n- POINT: The import fix went out.\n" +
+            "MINE: Send the vendor list to Leo.\nOTHER: Leo Brandt: Add the unit to the vendor page.\nOTHER: Someone");
+        var md = MeetingSummary.Render(MeetingSummary.Grounded(n, Speech), "Bohdan");
+        Assert.Contains("## Overview\n\nThe team reviewed the sprint.\n", md);
+        Assert.DoesNotContain("Again.", md);
+        Assert.Contains("- The import fix went out.", md);
+        Assert.Contains("## Action items for Bohdan\n\n- Send the vendor list to Leo.", md);
+        Assert.Contains("- **Leo Brandt**: Add the unit to the vendor page.", md);
+        Assert.DoesNotContain("Someone", md);
+    }
+
+    [Fact]
+    public void NoTasksSaysSoForYouWithoutAName()
+    {
+        var md = MeetingSummary.Render(MeetingSummary.Parse("OVERVIEW: A quick chat.\nPOINT: Nothing was decided today."), null);
+        Assert.Contains("## Your action items\n\nNo action items for you.", md);
+        Assert.DoesNotContain("for others", md);
+    }
+
+    [Fact]
+    public void AnInventedNameIsDroppedAndMeIsTheUser()
+    {
+        var n = MeetingSummary.Parse("OVERVIEW: x y z.\nOTHER: Sarah: Write the release notes today.\nOTHER: Me: Book the room for Friday.\n" +
+            "MINE: Review the action items from the meeting.");
+        var md = MeetingSummary.Render(MeetingSummary.Grounded(n, Speech), null);
+        Assert.Contains("- Write the release notes today.", md);
+        Assert.DoesNotContain("Sarah", md);
+        Assert.Contains("## Your action items\n\n- Book the room for Friday.", md);
+        Assert.DoesNotContain("Review the action items", md);
+    }
+
+    [Fact]
+    public void LongMeetingPartsAreMergedInTurn()
+    {
+        var a = MeetingSummary.Parse("OVERVIEW: Part one.\nPOINT: First point of A.\nPOINT: Second point of A.\nMINE: Fix the build server.");
+        var b = MeetingSummary.Parse("OVERVIEW: Part two.\nPOINT: First point of B.\nMINE: Fix the build server.");
+        var n = MeetingSummary.Merge(new[] { a, b }, "The whole meeting.");
+        Assert.Equal("The whole meeting.", n.Overview);
+        Assert.Equal(new[] { "First point of A.", "First point of B.", "Second point of A." }, n.Points);
+        Assert.Single(n.Mine);
+    }
+}

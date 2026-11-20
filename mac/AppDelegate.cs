@@ -282,6 +282,8 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         m.AddItem(Item("Open Log", () => MacUi.Open(Paths.LogPath())));
         m.AddItem(Sub("Notes", NotesMenu()));
         m.AddItem(Check("Show Recorder Panel", Settings.MeetingPanelVisible, TogglePanel));
+        // The name a meeting summary lists the user's action items under (Bohdan, 2026-11-20).
+        m.AddItem(Item(Settings.UserName.Length == 0 ? "Your Name…" : $"Your Name: {Settings.UserName}…", AskName));
 
         m.AddItem(NSMenuItem.SeparatorItem);
         m.AddItem(Item("Quit Huginn", Quit, "q"));
@@ -326,6 +328,21 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         alert.AddButton("Cancel");
         alert.Window.InitialFirstResponder = field;
         if (alert.RunModal() == (nint)(long)NSAlertButtonReturn.First) _recent.Rename(job.Id, field.StringValue);
+    }
+
+    // Empty is allowed: the summary then says "your action items".
+    private void AskName()
+    {
+        NSApplication.SharedApplication.ActivateIgnoringOtherApps(true);
+        var alert = new NSAlert { MessageText = "Your name", InformativeText = "Meeting summaries list your action items under this name." };
+        var field = new NSTextField(new CGRect(0, 0, 280, 24)) { StringValue = Settings.UserName };
+        alert.AccessoryView = field;
+        alert.AddButton("Save");
+        alert.AddButton("Cancel");
+        alert.Window.InitialFirstResponder = field;
+        if (alert.RunModal() != (nint)(long)NSAlertButtonReturn.First) return;
+        Settings.UserName = field.StringValue;
+        HuginnLog.Write($"settings: user name {(Settings.UserName.Length == 0 ? "cleared" : "set")}");
     }
 
     private void ConfirmDiscard()

@@ -689,6 +689,24 @@ internal sealed class HuginnEngine : IAsyncDisposable
         }
     }
 
+    // The local summary (MeetingSummary), written next to the transcript. A ✕ while it runs skips the summary only:
+    // the transcript is already saved.
+    private async Task SummarizeAsync(int jobId, string stamp, string transcript, string? notes, CancellationToken ct)
+    {
+        if (!File.Exists(Paths.CleanupModelPath())) { HuginnLog.Write($"meeting {stamp}: no summary (the local model is not on disk)"); return; }
+        Recent.SetStatus(jobId, "Summarizing…", JobTone.Busy, cancelable: true);
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var md = await MeetingSummary.MakeAsync(transcript, notes, Settings.UserName, _cleaner, ct);
+            if (md == null) { HuginnLog.Write($"meeting {stamp}: no summary (too little speech, or nothing usable from the model)"); return; }
+            await File.WriteAllTextAsync(MeetingSummary.PathFor(stamp), md, CancellationToken.None);
+            HuginnLog.Write($"meeting {stamp}: summarized here in {sw.Elapsed:m\\:ss} ({md.Length} chars)");
+        }
+        catch (OperationCanceledException) { HuginnLog.Write($"meeting {stamp}: summary skipped by the user"); }
+        catch (Exception ex) { HuginnLog.Write($"meeting {stamp}: the local summary failed", ex); }
+    }
+
     // Transcribe + file a finished capture in the BACKGROUND; it never blocks a new recording. Several can run at
     // once (meeting after meeting); transcription serializes on the shared model, recording does not.
     private async Task ProcessCaptureAsync(MeetingCapture cap)
@@ -707,6 +725,13 @@ internal sealed class HuginnEngine : IAsyncDisposable
             HuginnLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
             HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {r.Echo}{(r.RawTranscriptPath == null ? "" : " (raw kept)")}");
             Recent.SetTranscript(jobId, r.TranscriptPath);
+            // Without Odin the local model writes the only summary (and the name), so it is fetched once when it is
+            // not on disk yet: the dictation cleanup is off by default, so most people never got it.
+            if (!SendMeetings && !File.Exists(Paths.CleanupModelPath()))
+            {
+                Recent.SetStatus(jobId, "Getting the summary model…", JobTone.Busy, cancelable: true);
+                await _cleaner.PrepareAsync();
+            }
             // A name made here, so the row is named even when Odin is off or files nothing; Odin's title replaces it.
             var localName = await MeetingName.MakeAsync(r.Text, _cleaner);
             Recent.SetTitle(jobId, localName);
@@ -730,6 +755,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                 catch (Exception ex)
                 {
                     HuginnLog.Write($"meeting {cap.Stamp}: Odin filing failed", ex);
+                    await SummarizeAsync(jobId, cap.Stamp, r.Text, notes, cts.Token); // Odin wrote none: the local one
                     // The row looks like any saved meeting: it has its local name, and Odin is never named on it
                     // (Bohdan, 2026-11-20). The notice below is the one place the failure shows.
                     Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
@@ -740,6 +766,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             }
             else
             {
+                await SummarizeAsync(jobId, cap.Stamp, r.Text, notes, cts.Token);
                 Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
                 Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
                 _shell.Reveal(Recent.TranscriptPathFor(cap.Stamp) ?? r.TranscriptPath);

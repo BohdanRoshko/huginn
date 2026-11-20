@@ -25,11 +25,14 @@ internal sealed class Cleaner : IAsyncDisposable
         "Output ONLY the cleaned text — no quotes, no preamble, no notes.";
 
     private const int ContextTokens = 2048; // must match ModelParams.ContextSize in PrepareAsync
+    /// <summary>The window a meeting summary reads in one pass: the same weights, a larger context per call.</summary>
+    public const int LongContextTokens = 12288;
 
     private readonly string _modelPath;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private LLamaWeights? _weights;
     private StatelessExecutor? _executor;
+    private StatelessExecutor? _longExecutor;
     private volatile bool _ready;
 
     public event Action<string>? Status;
@@ -67,6 +70,7 @@ internal sealed class Cleaner : IAsyncDisposable
             var mp = new ModelParams(_modelPath) { ContextSize = ContextTokens, GpuLayerCount = 99 };
             _weights = LLamaWeights.LoadFromFile(mp);
             _executor = new StatelessExecutor(_weights, mp);
+            _longExecutor = new StatelessExecutor(_weights, new ModelParams(_modelPath) { ContextSize = LongContextTokens, GpuLayerCount = 99 });
 
             // Warm pass: compile the Vulkan shaders so the first real cleanup is fast.
             var warm = new InferenceParams { MaxTokens = 1, AntiPrompts = new List<string> { "<|im_end|>" } };
@@ -186,6 +190,34 @@ internal sealed class Cleaner : IAsyncDisposable
         }
     }
 
+    /// <summary>One answer from the model with the long window (a meeting summary). Empty when the model is not ready or
+    /// the answer ran out of room.</summary>
+    public async Task<string> AskLongAsync(string system, string user, int maxTokens, CancellationToken ct = default)
+    {
+        if (!_ready) await PrepareAsync().ConfigureAwait(false);
+        if (!_ready) return "";
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_longExecutor == null) return "";
+            var infer = new InferenceParams
+            {
+                MaxTokens = maxTokens,
+                AntiPrompts = new List<string> { "<|im_end|>" },
+                SamplingPipeline = new DefaultSamplingPipeline { Temperature = 0.2f },
+            };
+            var prompt = $"<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n";
+            var sb = new StringBuilder();
+            await foreach (var tok in _longExecutor.InferAsync(prompt, infer, ct).ConfigureAwait(false)) sb.Append(tok);
+            return sb.ToString().Replace("<|im_end|>", "").Trim();
+        }
+        finally
+        {
+            _gate.Release();
+            RestartIdleTimer();
+        }
+    }
+
     public async Task UnloadAsync()
     {
         await _gate.WaitAsync().ConfigureAwait(false);
@@ -193,6 +225,7 @@ internal sealed class Cleaner : IAsyncDisposable
         {
             _ready = false;
             _executor = null;
+            _longExecutor = null;
             _weights?.Dispose();
             _weights = null;
         }

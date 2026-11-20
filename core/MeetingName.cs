@@ -42,15 +42,23 @@ internal static class MeetingName
         return source.Success ? "Kumospace meeting" : "Meeting";
     }
 
-    internal static string SpeechOf(string transcript)
+    // A chat line from the meeting: "[00:12:34] * Andy typed: "…"".
+    private static readonly Regex Typed = new(@"^\[\d{1,2}:\d{2}:\d{2}\][ \t]*\*[ \t]*(.+? typed: .+)$", RegexOptions.Multiline);
+
+    /// <summary>The spoken lines as "Name: words", one per line, at most <paramref name="max"/> characters. With
+    /// <paramref name="withChat"/>, what people typed in the meeting chat too (a summary wants it; a title does not).</summary>
+    internal static string SpeechOf(string transcript, int max = MaxSpeechChars, bool withChat = false)
     {
         var sb = new StringBuilder();
-        foreach (Match m in Speech.Matches(transcript.Replace("\r\n", "\n")))
+        var text = transcript.Replace("\r\n", "\n");
+        var lines = Speech.Matches(text).Select(m => (m.Index, Line: $"{m.Groups[1].Value.Trim()}: {m.Groups[2].Value.Trim()}"));
+        if (withChat) lines = lines.Concat(Typed.Matches(text).Select(m => (m.Index, Line: m.Groups[1].Value.Trim()))).OrderBy(x => x.Index);
+        foreach (var (_, line) in lines)
         {
-            sb.Append(m.Groups[1].Value.Trim()).Append(": ").Append(m.Groups[2].Value.Trim()).Append('\n');
-            if (sb.Length >= MaxSpeechChars) break;
+            sb.Append(line).Append('\n');
+            if (sb.Length >= max) break;
         }
-        return sb.Length > MaxSpeechChars ? sb.ToString(0, MaxSpeechChars) : sb.ToString();
+        return sb.Length > max ? sb.ToString(0, max) : sb.ToString();
     }
 
     // One line, no quotes or "Title:", no full stop, at most 60 characters on a word boundary.

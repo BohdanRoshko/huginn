@@ -18,6 +18,10 @@ internal static class Settings
     /// ("odin", only where there is an Odin). File open_meetings.txt.</summary>
     public static bool OpenMeetingsInOdin { get => Read("open_meetings.txt") == "odin"; set => Write("open_meetings.txt", value ? "odin" : "window"); }
 
+    /// <summary>The name of the person using Huginn, set in the menu ("Your Name…"). A meeting summary lists their action
+    /// items under it; empty (the default) = "your action items". File user_name.txt.</summary>
+    public static string UserName { get => Read("user_name.txt") ?? ""; set => Write("user_name.txt", value.Trim()); }
+
     /// <summary>Show the recorder panel. Default ON on Windows; OFF on the Mac, which is a menu bar app first.</summary>
     public static bool MeetingPanelVisible { get => Flag("panel.txt", !OperatingSystem.IsMacOS()); set => SetFlag("panel.txt", value); }
 

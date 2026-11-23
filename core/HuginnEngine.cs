@@ -42,6 +42,10 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private MeetingCapture? _current;      // the recording in progress
     private bool _meetingActive;
     private int _processingCount;
+    private readonly ConcurrentDictionary<string, byte> _busyStamps = new(); // recordings being transcribed or waiting for it
+    private Timer? _audioTimer;            // the cleanup of old meeting audio
+    private int _audioCleaning;
+    private bool _audioCleanedOnce;
     private bool _dictationOn;             // the hotkey is installed (the switch is on and the model is there)
     private bool _ready;                   // the Whisper model is on disk
     private bool _quitting;
@@ -170,6 +174,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                 _p.CallPrompt.OptionChosen += option => Ui(() => PromptOption(option));
             }
         }
+        _audioTimer = new Timer(_ => CleanAudio("on a timer"), null, TimeSpan.FromMinutes(2), AudioCleanEvery);
         _shell.SetTrayState(TrayState.Off);
         _shell.Refresh();
         _ = InitializeAsync();
@@ -288,6 +293,42 @@ internal sealed class HuginnEngine : IAsyncDisposable
         NotesMode = mode;
         Settings.NotesMode = mode;
         _shell.Refresh();
+    }
+
+    // ---- old meeting audio ----
+
+    /// <summary>How long a meeting's raw audio is kept: a key of <see cref="AudioRetention.Choices"/>.</summary>
+    public string KeepAudio { get; private set; } = Settings.KeepAudio;
+
+    private static readonly TimeSpan AudioCleanEvery = TimeSpan.FromHours(6);
+
+    /// <summary>The menu's choice. The cleanup follows a minute later, so a wrong click can be put back first.</summary>
+    public void SetKeepAudio(string key)
+    {
+        if (!AudioRetention.IsChoice(key) || key == KeepAudio) return;
+        KeepAudio = key;
+        Settings.KeepAudio = key;
+        HuginnLog.Write($"meeting audio: keep set to \"{AudioRetention.LabelFor(key)}\"; the cleanup runs in a minute");
+        _audioTimer?.Change(TimeSpan.FromMinutes(1), AudioCleanEvery);
+        _shell.Refresh();
+    }
+
+    // Deletes the audio of meetings past the chosen age that have a transcript. Runs two minutes after the start,
+    // every six hours, a minute after the setting changes, and after each transcription. Never the recording in
+    // progress, and never one still being transcribed or waiting for it.
+    private void CleanAudio(string why)
+    {
+        if (Interlocked.Exchange(ref _audioCleaning, 1) == 1) return;
+        try
+        {
+            var key = KeepAudio;
+            var r = AudioRetention.Clean(Paths.MeetingsDir(), key, DateTime.Now, stamp => _current?.Stamp == stamp || _busyStamps.ContainsKey(stamp));
+            if (r.Files > 0 || r.Failed > 0 || !_audioCleanedOnce) HuginnLog.Write($"meeting audio ({why}): {r.Describe(key, dryRun: false)}");
+            _audioCleanedOnce = true;
+            if (r.Files > 0) _shell.Refresh();
+        }
+        catch (Exception ex) { HuginnLog.Write("meeting audio: the cleanup failed", ex); }
+        finally { Interlocked.Exchange(ref _audioCleaning, 0); }
     }
 
     /// <summary>Picks the microphone for dictation and meetings ("" = system default).</summary>
@@ -712,6 +753,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     // once (meeting after meeting); transcription serializes on the shared model, recording does not.
     private async Task ProcessCaptureAsync(MeetingCapture cap)
     {
+        _busyStamps[cap.Stamp] = 0;
         Interlocked.Increment(ref _processingCount);
         UpdatePriority();
         int jobId = Recent.Add(cap.Stamp, cap.StartedLocal);
@@ -792,6 +834,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
             cts.Dispose();
             Interlocked.Decrement(ref _processingCount);
             UpdatePriority();
+            _busyStamps.TryRemove(cap.Stamp, out _);
+            _ = Task.Run(() => CleanAudio("after a transcription")); // "delete after transcription" acts here
         }
     }
 
@@ -1157,6 +1201,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     {
         _quitWatcher?.Dispose();
         _kumoTimer?.Dispose();
+        _audioTimer?.Dispose();
         _meet.Dispose();
         _callTimer?.Dispose();
         _previewTimer?.Dispose();

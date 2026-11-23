@@ -50,6 +50,14 @@ internal static class Settings
         set => Write("notes.txt", value);
     }
 
+    /// <summary>How long a meeting's raw audio is kept: one of <see cref="AudioRetention.Choices"/>' keys ("1m",
+    /// "3w", "2w", "1w", or "0" = delete once transcribed). Default 2 weeks. File keep_audio.txt.</summary>
+    public static string KeepAudio
+    {
+        get { var v = Read("keep_audio.txt")?.ToLowerInvariant(); return AudioRetention.IsChoice(v) ? v! : AudioRetention.Default; }
+        set => Write("keep_audio.txt", value);
+    }
+
     /// <summary>The chosen microphone: the platform's device id, or "" for the system default. File mic.txt
     /// (Windows wrote a WaveIn index there, "-1" = default; that still reads the same).</summary>
     public static string Microphone

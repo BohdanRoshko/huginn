@@ -163,6 +163,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _callAskItem.Checked = _engine.DetectionMode == "ask";
         _callAutoItem.Checked = _engine.DetectionMode == "auto";
         _callOffItem.Checked = _engine.DetectionMode == "off";
+        foreach (var (key, item) in _keepAudioItems) item.Checked = _engine.KeepAudio == key;
     });
 
     public void Exit() => RunOnUi(ExitApp);
@@ -268,6 +269,15 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _recordingsItem = new ToolStripMenuItem("Recordings", null, (_, _) => { Directory.CreateDirectory(Paths.MeetingsDir()); OpenPath(Paths.MeetingsDir()); })
             { ToolTipText = "Open the recordings folder" };
         menu.Items.Add(_recordingsItem);
+        // How long a meeting's raw audio stays on disk. The transcript always stays.
+        var keepMenu = new ToolStripMenuItem("Keep meeting audio") { ToolTipText = "Only the audio is deleted. Transcripts stay." };
+        foreach (var (key, label) in AudioRetention.Choices)
+        {
+            var item = new ToolStripMenuItem(label, null, (_, _) => _engine.SetKeepAudio(key));
+            _keepAudioItems[key] = item;
+            keepMenu.DropDownItems.Add(item);
+        }
+        menu.Items.Add(keepMenu);
         menu.Items.Add(new ToolStripMenuItem("Open log", null, (_, _) => OpenPath(Paths.LogPath())));
         menu.Items.Add(new ToolStripMenuItem("Quit", null, (_, _) => ExitApp()));
         menu.Opening += (_, _) => Refresh();
@@ -275,6 +285,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
     }
 
     private ToolStripMenuItem? _nameItem;
+    private readonly Dictionary<string, ToolStripMenuItem> _keepAudioItems = new();
 
     private static string NameItemText() => Settings.UserName.Length == 0 ? "Your name…" : $"Your name: {Settings.UserName}…";
 

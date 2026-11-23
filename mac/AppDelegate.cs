@@ -279,6 +279,7 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
 
         m.AddItem(NSMenuItem.SeparatorItem);
         m.AddItem(Item(_engine.RecordingsSizeText, () => { Directory.CreateDirectory(Paths.MeetingsDir()); MacUi.Open(Paths.MeetingsDir()); }));
+        m.AddItem(Sub("Keep Meeting Audio", KeepAudioMenu()));
         m.AddItem(Item("Open Log", () => MacUi.Open(Paths.LogPath())));
         m.AddItem(Sub("Notes", NotesMenu()));
         m.AddItem(Check("Show Recorder Panel", Settings.MeetingPanelVisible, TogglePanel));
@@ -385,6 +386,15 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
         menu.AddItem(Check("Ask With a Pop-Up", _engine.DetectionMode == "ask", () => _engine.SetDetectionMode("ask")));
         menu.AddItem(Check("Record Automatically", _engine.DetectionMode == "auto", () => _engine.SetDetectionMode("auto")));
         menu.AddItem(Check("Off", _engine.DetectionMode == "off", () => _engine.SetDetectionMode("off")));
+        return menu;
+    }
+
+    // How long a meeting's raw audio stays on disk. The transcript always stays.
+    private NSMenu KeepAudioMenu()
+    {
+        var menu = new NSMenu { AutoEnablesItems = false };
+        foreach (var (key, label) in AudioRetention.Choices)
+            menu.AddItem(Check(label, _engine.KeepAudio == key, () => _engine.SetKeepAudio(key)));
         return menu;
     }
 

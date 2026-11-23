@@ -57,13 +57,14 @@ internal sealed class Transcriber : IAsyncDisposable
     public bool IsLoaded => _factory != null;
 
     /// <summary>Starts the warm-up load unless the model is loaded or already loading. Called at Record and on
-    /// the dictation key, so the load runs while the user speaks.</summary>
+    /// the dictation key, so the load runs while the user speaks. The load runs on a pool thread: reading the
+    /// model takes seconds, and the caller is the window thread, which also owns the dictation key's hook.</summary>
     public Task EnsureLoadedAsync()
     {
         if (IsLoaded) return Task.CompletedTask;
         var t = _loading;
         if (t != null && !t.IsCompleted) return t;
-        return _loading = WarmupAsync();
+        return _loading = Task.Run(WarmupAsync);
     }
 
     /// <summary>

@@ -23,6 +23,9 @@ internal sealed class WorkerClient : IDisposable
     public TimeSpan Patience { get; init; } = TimeSpan.FromSeconds(60);
     /// <summary>How long a short request may take.</summary>
     public TimeSpan Quick { get; init; } = TimeSpan.FromSeconds(4);
+    /// <summary>How long the other computer is looked for when a recording ends, before the job is done here. One
+    /// short request that got no answer is not a computer that is down.</summary>
+    public TimeSpan Reach { get; init; } = TimeSpan.FromSeconds(30);
 
     public WorkerClient(string url, string key)
     {
@@ -48,25 +51,21 @@ internal sealed class WorkerClient : IDisposable
         return new WorkerClient(url, s.WorkerKey);
     }
 
-    /// <summary>Tells the other computer a recording began, so it loads the models. False when it did not answer.</summary>
-    public async Task<bool> MeetingStartedAsync(string stamp)
+    /// <summary>Tells the other computer a recording runs, so it loads the models and keeps them. Said at Record
+    /// and again while the recording runs. Null when it answered, else a few words on why not. Never throws.</summary>
+    public async Task<string?> MeetingStartedAsync(string stamp, CancellationToken ct = default)
     {
         try
         {
-            using var quick = new CancellationTokenSource(Quick);
+            using var quick = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            quick.CancelAfter(Quick);
             using var resp = await _http.PostAsync($"meetings/{stamp}/started", null, quick.Token).ConfigureAwait(false);
-            if (resp.IsSuccessStatusCode) return true;
-            HuginnLog.Write($"worker: the other computer answered {(int)resp.StatusCode} to the start of {stamp}");
-            return false;
+            return resp.IsSuccessStatusCode ? null : $"it answered {(int)resp.StatusCode}";
         }
-        catch (Exception ex)
-        {
-            HuginnLog.Write($"worker: the other computer did not answer the start of {stamp} ({Reason(ex)})");
-            return false;
-        }
+        catch (Exception ex) { return Reason(ex); }
     }
 
-    /// <summary>Tells the other computer that a recording was thrown away. Best effort.</summary>
+    /// <summary>Tells the other computer that a recording ended and will not be sent. Best effort.</summary>
     public async Task MeetingDroppedAsync(string stamp)
     {
         try
@@ -74,7 +73,30 @@ internal sealed class WorkerClient : IDisposable
             using var quick = new CancellationTokenSource(Quick);
             using var resp = await _http.PostAsync($"meetings/{stamp}/dropped", null, quick.Token).ConfigureAwait(false);
         }
-        catch { /* it forgets the recording by itself after some hours */ }
+        catch { /* it takes the recording as ended by itself, minutes after the last word about it */ }
+    }
+
+    // Is it there? Asked again for a while: one request without an answer must not send the work back here.
+    private async Task HelloAsync(CancellationToken ct)
+    {
+        var pause = TimeSpan.FromSeconds(1);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                using var quick = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                quick.CancelAfter(Quick);
+                using var hello = await _http.GetAsync("hello", quick.Token).ConfigureAwait(false);
+                if (hello.IsSuccessStatusCode) return;
+                // An answer, but not ours to use (a wrong secret, mostly): asking again changes nothing.
+                throw new InvalidOperationException($"it answered {(int)hello.StatusCode} (is the secret the same on both?)");
+            }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested && sw.Elapsed + pause < Reach)
+            {
+                await Task.Delay(pause, ct).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
@@ -85,16 +107,14 @@ internal sealed class WorkerClient : IDisposable
     public async Task<WorkerResult> ProcessAsync(string stamp, DateTime startedLocal, IEnumerable<(string Name, string Path)> files,
         MeetingOptions options, Action<string> status, CancellationToken ct)
     {
-        bool queued = false;
+        bool asked = false; // the job was sent for queueing; it may be queued there even if no answer came back
+        // The job is not going to end there: stop it, or, when it never got that far, say the recording is over
+        // so the models are not kept in memory for it.
+        void GiveUp() => _ = asked ? StopAsync(stamp) : MeetingDroppedAsync(stamp);
         try
         {
             status("Sending to the other computer…");
-            using (var quick = CancellationTokenSource.CreateLinkedTokenSource(ct))
-            {
-                quick.CancelAfter(Quick);
-                using var hello = await _http.GetAsync("hello", quick.Token).ConfigureAwait(false);
-                if (!hello.IsSuccessStatusCode) throw new InvalidOperationException($"it answered {(int)hello.StatusCode} (is the secret the same on both?)");
-            }
+            await HelloAsync(ct).ConfigureAwait(false);
             foreach (var (name, path) in files)
             {
                 if (!File.Exists(path) || new FileInfo(path).Length == 0) continue;
@@ -112,25 +132,25 @@ internal sealed class WorkerClient : IDisposable
             {
                 quick.CancelAfter(Quick);
                 using var body = new StringContent(JsonSerializer.Serialize(settings), System.Text.Encoding.UTF8, "application/json");
+                asked = true;
                 using var resp = await _http.PostAsync($"jobs/{stamp}", body, quick.Token).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode) throw new InvalidOperationException($"it did not take the job: {await ErrorAsync(resp).ConfigureAwait(false)}");
             }
-            queued = true;
             return await WaitAsync(stamp, status, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            if (queued) _ = StopAsync(stamp);
+            GiveUp();
             throw new TimeoutException("it stopped answering");
         }
         catch (HttpRequestException ex)
         {
-            if (queued) _ = StopAsync(stamp);
+            GiveUp();
             throw new InvalidOperationException($"it is not reachable ({Reason(ex)})");
         }
         catch
         {
-            if (queued) _ = StopAsync(stamp); // cancelled here, or taken back: it need not finish the work
+            GiveUp(); // cancelled here, or taken back: it need not finish the work
             throw;
         }
     }

@@ -557,7 +557,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
         HidePrompt(); // a recording is starting, whoever started it: the pop-up has nothing left to ask
         _meetingActive = true;
         _transcriber.KeepWarm = true; // a model in memory stays there until Stop
-        // Load now, so Stop finds the model in memory. With another computer set up, that one loads instead.
+        // Load now, so Stop finds the model in memory. With another computer set up nothing loads here at Record,
+        // whether that one answers or not: this one loads at Stop, and only if that one cannot be reached then.
         if (_worker == null) _ = _transcriber.EnsureLoadedAsync();
         if (_dictationOn) _p.Hotkey.Uninstall(); // free the mic and keys for the call; dictation pauses while recording
         var plan = MeetingCapture.Plan(DateTime.Now);
@@ -577,7 +578,11 @@ internal sealed class HuginnEngine : IAsyncDisposable
             return;
         }
         _current = plan;
-        if (_worker != null) _ = WarmWorkerAsync(plan.Stamp);
+        if (_worker != null)
+        {
+            _workerWord = new CancellationTokenSource();
+            _ = TellWorkerAsync(_worker, plan.Stamp, _workerWord.Token, WorkerStillOn, WorkerAskAgain);
+        }
         _source = null; // StartForCall / StartForKumo name the app right after this
         _timeline = SpeakerTimeline.Begin(plan.StartedLocal);
         _shell.SetTrayState(TrayState.Recording);
@@ -595,23 +600,45 @@ internal sealed class HuginnEngine : IAsyncDisposable
         _shell.Refresh();
     }
 
-    // The other computer loads the models while the meeting runs. If it does not answer, this one loads them, as
-    // it does with no other computer set up.
-    private async Task WarmWorkerAsync(string stamp)
+    private static readonly TimeSpan WorkerStillOn = TimeSpan.FromSeconds(60);  // "the recording still runs", while it answers
+    private static readonly TimeSpan WorkerAskAgain = TimeSpan.FromSeconds(10); // the same, while it does not
+    private CancellationTokenSource? _workerWord; // ends the word to the other computer when the recording ends
+
+    /// <summary>
+    /// Says to the other computer, at Record and again while the recording runs, that a recording runs: it loads
+    /// the models at the first word it gets and lets them go some minutes after the last. Nothing loads on this
+    /// computer, whatever the answer: a request without an answer is asked again, and the models are needed here
+    /// only if the other computer cannot be reached when the recording ends. Ends with <paramref name="ct"/>.
+    /// </summary>
+    internal static async Task TellWorkerAsync(WorkerClient worker, string stamp, CancellationToken ct, TimeSpan stillOn, TimeSpan askAgain)
     {
-        if (await _worker!.MeetingStartedAsync(stamp))
+        bool? answered = null;
+        while (!ct.IsCancellationRequested)
         {
-            HuginnLog.Write($"meeting {stamp}: the other computer loads the models; none load here");
-            return;
+            var problem = await worker.MeetingStartedAsync(stamp, ct).ConfigureAwait(false);
+            if (ct.IsCancellationRequested) return; // the recording ended meanwhile: nothing more to say about it
+            if (problem == null && answered != true)
+                HuginnLog.Write(answered == null
+                    ? $"meeting {stamp}: the other computer loads the models; none load here"
+                    : $"meeting {stamp}: the other computer answers now and loads the models");
+            if (problem != null && answered != false)
+                HuginnLog.Write($"meeting {stamp}: the other computer does not answer ({problem}); it is asked again while the recording runs, and no model loads here");
+            answered = problem == null;
+            try { await Task.Delay(answered.Value ? stillOn : askAgain, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
         }
-        HuginnLog.Write($"meeting {stamp}: the models load here");
-        if (_meetingActive && _current?.Stamp == stamp) _ = _transcriber.EnsureLoadedAsync();
+    }
+
+    private void EndWorkerWord()
+    {
+        try { Interlocked.Exchange(ref _workerWord, null)?.Cancel(); } catch { /* already over */ }
     }
 
     // Shared teardown for every stop: the capture is flushed and the UI is back to ready at once. The next
     // meeting can start while (if kept) this one processes in the background.
     private async Task<MeetingCapture?> EndMeetingAsync()
     {
+        EndWorkerWord(); // no more "a recording runs": what follows is a job, or the word that it ended
         SaveNotes(); // the last edits, before the recorder stops accepting them
         _p.Meeting.Stop();
         var cap = await _p.Meeting.FinalizeAsync();

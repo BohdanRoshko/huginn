@@ -41,15 +41,20 @@ public class WorkerTests
         public readonly List<bool> Warm = new();
         public MeetingWorker Worker = null!;
 
-        public Rig(MeetingWorker.Processor process)
+        public Rig(MeetingWorker.Processor process, TimeSpan? openLife = null, bool start = true)
         {
-            Worker = new MeetingWorker(new[] { "127.0.0.1" }, Port, Key, There, threads: 3, process, on => { lock (Warm) Warm.Add(on); });
-            Worker.Start();
+            Worker = new MeetingWorker(new[] { "127.0.0.1" }, Port, Key, There, threads: 3, process, on => { lock (Warm) Warm.Add(on); })
+            {
+                OpenLife = openLife ?? TimeSpan.FromMinutes(5),
+            };
+            if (start) Worker.Start();
         }
+
+        public bool[] WarmNow { get { lock (Warm) return Warm.ToArray(); } }
 
         public WorkerClient Client(string key = Key) => new($"http://127.0.0.1:{Port}", key)
         {
-            Poll = TimeSpan.FromMilliseconds(30), Patience = TimeSpan.FromSeconds(3), Quick = TimeSpan.FromSeconds(3),
+            Poll = TimeSpan.FromMilliseconds(30), Patience = TimeSpan.FromSeconds(3), Quick = TimeSpan.FromSeconds(3), Reach = TimeSpan.FromSeconds(3),
         };
 
         /// <summary>A recording's files on the recording computer, as (name after the stamp, path).</summary>
@@ -123,10 +128,10 @@ public class WorkerTests
         Assert.Empty(Directory.GetFiles(rig.There));
 
         using var wrong = rig.Client("not-the-secret-at-all");
-        Assert.False(await wrong.MeetingStartedAsync(Stamp));
+        Assert.Equal("it answered 401", await wrong.MeetingStartedAsync(Stamp));
         await Assert.ThrowsAsync<InvalidOperationException>(() => wrong.ProcessAsync(Stamp, Started, rig.Recording(), Sender, _ => { }, CancellationToken.None));
         Assert.False(ran);
-        Assert.Empty(rig.Warm);
+        Assert.Empty(rig.WarmNow);
     }
 
     [Fact]
@@ -157,15 +162,116 @@ public class WorkerTests
         using var _ = rig;
         using var client = rig.Client();
 
-        Assert.True(await client.MeetingStartedAsync(Stamp));
-        Assert.Equal(new[] { true }, rig.Warm);
-        await client.MeetingDroppedAsync(Stamp);
-        Assert.Equal(new[] { true, false }, rig.Warm);
+        const string thrownAway = "2026-11-02_091000";
+        Assert.Null(await client.MeetingStartedAsync(thrownAway));
+        Assert.Equal(new[] { true }, rig.WarmNow);
+        await client.MeetingDroppedAsync(thrownAway);
+        Assert.Equal(new[] { true, false }, rig.WarmNow);
 
         // A recording that is kept: the models stay from its start to the end of its job.
-        Assert.True(await client.MeetingStartedAsync(Stamp));
+        Assert.Null(await client.MeetingStartedAsync(Stamp));
         await client.ProcessAsync(Stamp, Started, rig.Recording(), Sender, _ => { }, CancellationToken.None);
-        Assert.Equal(new[] { true, false, true, false }, rig.Warm);
+        Assert.Equal(new[] { true, false, true, false }, rig.WarmNow);
+    }
+
+    [Fact]
+    public async Task AWordThatARecordingRunsWhichComesAfterItEndedLoadsNothing()
+    {
+        // The word sat somewhere for half a minute; meanwhile the recording was stopped and thrown away.
+        Rig rig = null!;
+        rig = new Rig((job, _, _) => Task.FromResult(Answer(job, rig.There)));
+        using var _ = rig;
+        using var client = rig.Client();
+
+        await client.MeetingDroppedAsync(Stamp);
+        Assert.Null(await client.MeetingStartedAsync(Stamp));
+        Assert.Empty(rig.WarmNow);
+
+        // The same after its job: the word changes nothing, the models go when the job is done.
+        const string kept = "2026-11-02_101500";
+        var files = rig.Recording().Select(f => { var copy = f.Item2.Replace(Stamp, kept); File.Copy(f.Item2, copy, overwrite: true); return (f.Item1, copy); }).ToList();
+        await client.ProcessAsync(kept, new DateTime(2026, 11, 2, 10, 15, 0), files, Sender, _ => { }, CancellationToken.None);
+        Assert.Null(await client.MeetingStartedAsync(kept));
+        Assert.Equal(new[] { true, false }, rig.WarmNow);
+    }
+
+    [Fact]
+    public async Task TheModelsStayWhileTheWordIsRepeatedAndGoWhenItStops()
+    {
+        Rig rig = null!;
+        rig = new Rig((job, _, _) => Task.FromResult(Answer(job, rig.There)), openLife: TimeSpan.FromMilliseconds(600));
+        using var _ = rig;
+        using var client = rig.Client();
+        using var recording = new CancellationTokenSource();
+
+        var word = HuginnEngine.TellWorkerAsync(client, Stamp, recording.Token, stillOn: TimeSpan.FromMilliseconds(100), askAgain: TimeSpan.FromMilliseconds(100));
+        await Task.Delay(TimeSpan.FromSeconds(2)); // three times the life: only the repeated word keeps it
+        Assert.Equal(new[] { true }, rig.WarmNow);
+
+        // The recording computer goes away without a word (closed, unplugged): the models are let go by themselves.
+        recording.Cancel();
+        await word.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitFor(() => rig.WarmNow.Length == 2);
+        Assert.Equal(new[] { true, false }, rig.WarmNow);
+    }
+
+    [Fact]
+    public async Task AComputerThatDoesNotAnswerAtRecordIsAskedAgainUntilItDoes()
+    {
+        Rig rig = null!;
+        rig = new Rig((job, _, _) => Task.FromResult(Answer(job, rig.There)), start: false);
+        using var _ = rig;
+        using var client = new WorkerClient($"http://127.0.0.1:{rig.Port}", Key) { Quick = TimeSpan.FromSeconds(2) };
+        using var recording = new CancellationTokenSource();
+
+        var word = HuginnEngine.TellWorkerAsync(client, Stamp, recording.Token, stillOn: TimeSpan.FromMilliseconds(100), askAgain: TimeSpan.FromMilliseconds(100));
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+        Assert.False(word.IsCompleted); // still asking, and nothing was loaded anywhere
+        Assert.Empty(rig.WarmNow);
+
+        rig.Worker.Start(); // it is back mid-recording
+        await WaitFor(() => rig.WarmNow.Length == 1);
+        Assert.Equal(new[] { true }, rig.WarmNow);
+        recording.Cancel();
+        await word.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task AComputerThatAnswersLateWhenTheRecordingEndsStillGetsTheJob()
+    {
+        Rig rig = null!;
+        rig = new Rig((job, _, _) => Task.FromResult(Answer(job, rig.There)), start: false);
+        using var _ = rig;
+        using var client = new WorkerClient($"http://127.0.0.1:{rig.Port}", Key)
+        {
+            Poll = TimeSpan.FromMilliseconds(30), Quick = TimeSpan.FromSeconds(2), Reach = TimeSpan.FromSeconds(20),
+        };
+
+        var job = client.ProcessAsync(Stamp, Started, rig.Recording(), Sender, _ => { }, CancellationToken.None);
+        await Task.Delay(TimeSpan.FromSeconds(3)); // more than one request's time with nobody there
+        Assert.False(job.IsCompleted);
+        rig.Worker.Start();
+
+        var r = await job.WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.Equal("Weekly planning", r.Title);
+    }
+
+    [Fact]
+    public async Task ARecordingCancelledBeforeItsJobWasQueuedIsToldAsEnded()
+    {
+        // Record, Stop, and the cancel button a second later: the files were still on their way.
+        Rig rig = null!;
+        rig = new Rig((job, _, _) => Task.FromResult(Answer(job, rig.There)));
+        using var _ = rig;
+        using var client = rig.Client();
+        using var cts = new CancellationTokenSource();
+        Assert.Null(await client.MeetingStartedAsync(Stamp));
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ProcessAsync(Stamp, Started, rig.Recording(), Sender, _ => { }, cts.Token));
+
+        await WaitFor(() => rig.WarmNow.Length == 2);
+        Assert.Equal(new[] { true, false }, rig.WarmNow);
     }
 
     [Fact]
@@ -218,9 +324,9 @@ public class WorkerTests
     [Fact]
     public async Task AComputerThatIsNotThereFailsFast()
     {
-        using var client = new WorkerClient($"http://127.0.0.1:{FreePort()}", Key) { Quick = TimeSpan.FromSeconds(2), Patience = TimeSpan.FromSeconds(2) };
+        using var client = new WorkerClient($"http://127.0.0.1:{FreePort()}", Key) { Quick = TimeSpan.FromSeconds(2), Patience = TimeSpan.FromSeconds(2), Reach = TimeSpan.FromSeconds(3) };
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        Assert.False(await client.MeetingStartedAsync(Stamp));
+        Assert.NotNull(await client.MeetingStartedAsync(Stamp));
         using var rig = new Rig((_, _, _) => throw new InvalidOperationException("never called"));
         await Assert.ThrowsAnyAsync<Exception>(() => client.ProcessAsync(Stamp, Started, rig.Recording(), Sender, _ => { }, CancellationToken.None));
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(15), $"took {sw.Elapsed}");

@@ -18,12 +18,12 @@ namespace Huginn;
 /// port is not open on the computer's other networks.
 /// <code>
 /// GET    /hello                         is anyone there
-/// POST   /meetings/{stamp}/started      a recording began: load the models and keep them
-/// POST   /meetings/{stamp}/dropped      that recording was thrown away: nothing will come
+/// POST   /meetings/{stamp}/started      a recording runs: load the models and keep them. Said again every minute
+/// POST   /meetings/{stamp}/dropped      that recording ended and nothing will come
 /// PUT    /jobs/{stamp}/files/{name}     one file of the recording, streamed to disk
 /// POST   /jobs/{stamp}                  all files are here: queue it. Body: started, userName, talkLevel, language
 /// GET    /jobs/{stamp}                  waiting, working, done (with the transcript and the title), failed
-/// DELETE /jobs/{stamp}                  stop it
+/// DELETE /jobs/{stamp}                  stop it; the recording is over
 /// </code>
 /// The files land in the meetings folder under the names the app itself uses, so this computer keeps a full copy.
 /// Plain HTTP, one request per connection, a body always with its length: enough for one sender on a home network,
@@ -61,7 +61,7 @@ internal sealed class MeetingWorker : IDisposable
     private sealed record Request(string Method, string Path, Dictionary<string, string> Headers, long ContentLength, byte[] Early, NetworkStream Stream);
 
     private static readonly Regex StampShape = new(@"^\d{4}-\d{2}-\d{2}_\d{6}$", RegexOptions.CultureInvariant);
-    private static readonly TimeSpan OpenMeetingLife = TimeSpan.FromHours(12); // a start with no job after it is forgotten
+    private static readonly TimeSpan OverKept = TimeSpan.FromHours(1);         // how long an ended recording is remembered
     private static readonly TimeSpan HeadTime = TimeSpan.FromSeconds(15);      // a request's first line and headers
     private static readonly TimeSpan BodyIdle = TimeSpan.FromSeconds(60);      // a body may be slow, not silent
     private const int FinishedKept = 50;
@@ -76,8 +76,16 @@ internal sealed class MeetingWorker : IDisposable
     private readonly Processor _process;
     private readonly Action<bool>? _warm;
     private readonly ConcurrentDictionary<string, Entry> _jobs = new();
-    private readonly ConcurrentDictionary<string, DateTime> _open = new();      // recordings in progress on the sender
+    private readonly Dictionary<string, DateTime> _open = new();                // recordings that run on the sender, by its last word
+    private readonly Dictionary<string, DateTime> _over = new();                // recordings that ended: a late word is not believed
+    private readonly object _openLock = new();
     private readonly ConcurrentDictionary<string, byte> _receiving = new();     // stamps with a file arriving now
+    private System.Threading.Timer? _sweep;
+
+    /// <summary>How long a recording counts as running after the sender's last word about it. The sender says it
+    /// every minute, so a recording that ended with no word (the sender was closed, the cable was pulled) stops
+    /// holding the models in memory after this long.</summary>
+    public TimeSpan OpenLife { get; init; } = TimeSpan.FromMinutes(5);
     private readonly Channel<Entry> _queue = Channel.CreateUnbounded<Entry>();
     private readonly CancellationTokenSource _stop = new();
     private readonly object _warmLock = new();
@@ -126,6 +134,8 @@ internal sealed class MeetingWorker : IDisposable
         }
         foreach (var l in _listeners) _ = Task.Run(() => AcceptLoopAsync(l));
         _ = Task.Run(WorkLoopAsync);
+        var every = TimeSpan.FromMilliseconds(Math.Clamp(OpenLife.TotalMilliseconds / 4, 50, 30_000));
+        _sweep = new System.Threading.Timer(_ => UpdateWarm(), null, every, every);
         HuginnLog.Write($"worker: listening on {string.Join(", ", _endpoints)}");
     }
 
@@ -255,14 +265,29 @@ internal sealed class MeetingWorker : IDisposable
 
         if (method == "POST" && parts is ["meetings", var started, "started"])
         {
-            _open[started] = DateTime.UtcNow;
-            HuginnLog.Write($"worker: recording {started} began on the recording computer; the models load now");
+            // The sender says this at Record and every minute after. A word that arrives after the recording
+            // ended (it can sit in a busy network or a busy computer for a while) must not load anything.
+            bool first, late;
+            lock (_openLock)
+            {
+                late = _over.ContainsKey(started) || _jobs.ContainsKey(started);
+                first = !late && !_open.ContainsKey(started);
+                if (!late) _open[started] = DateTime.UtcNow;
+            }
+            if (late) HuginnLog.Write($"worker: a late word that recording {started} runs; it has ended, so nothing loads");
+            if (first) HuginnLog.Write($"worker: recording {started} began on the recording computer; the models load now");
             UpdateWarm();
             return (204, null);
         }
         if (method == "POST" && parts is ["meetings", var dropped, "dropped"])
         {
-            if (_open.TryRemove(dropped, out _)) HuginnLog.Write($"worker: recording {dropped} was thrown away there; nothing comes");
+            bool was;
+            lock (_openLock)
+            {
+                was = _open.Remove(dropped);
+                _over[dropped] = DateTime.UtcNow;
+            }
+            if (was) HuginnLog.Write($"worker: recording {dropped} ended there and is not sent; nothing comes");
             UpdateWarm();
             return (204, null);
         }
@@ -279,6 +304,12 @@ internal sealed class MeetingWorker : IDisposable
                 HuginnLog.Write($"worker: job {stopped} stopped by the recording computer");
                 try { e.Cts.Cancel(); } catch { /* already over */ }
             }
+            lock (_openLock) // a stop that came before the job was queued: the recording is over all the same
+            {
+                _open.Remove(stopped);
+                _over[stopped] = DateTime.UtcNow;
+            }
+            UpdateWarm();
             return (204, null);
         }
         return (404, null);
@@ -363,7 +394,11 @@ internal sealed class MeetingWorker : IDisposable
             return entry;
         });
         if (!queued) return (409, new { error = "that job is already queued" });
-        _open.TryRemove(stamp, out _);
+        lock (_openLock)
+        {
+            _open.Remove(stamp);
+            _over[stamp] = DateTime.UtcNow; // its job is here: a late "it runs" changes nothing
+        }
         Forget();
         UpdateWarm();
         HuginnLog.Write($"worker: job {stamp} queued (me={Size(stamp, "me.wav")}, them={Size(stamp, "them.wav")})");
@@ -440,16 +475,27 @@ internal sealed class MeetingWorker : IDisposable
     // The models stay loaded while a recording runs on the sender or a job waits or runs here.
     private void UpdateWarm()
     {
-        foreach (var (stamp, at) in _open)
-            if (DateTime.UtcNow - at > OpenMeetingLife) _open.TryRemove(stamp, out _);
-        bool want = !_open.IsEmpty || _jobs.Values.Any(e => !e.Finished);
-        lock (_warmLock)
+        var silent = new List<string>();
+        bool open;
+        lock (_openLock)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var (stamp, at) in _open.ToList())
+                if (now - at > OpenLife) { _open.Remove(stamp); _over[stamp] = now; silent.Add(stamp); }
+            foreach (var (stamp, at) in _over.ToList())
+                if (now - at > OverKept) _over.Remove(stamp);
+            open = _open.Count > 0;
+        }
+        foreach (var stamp in silent)
+            HuginnLog.Write($"worker: no word about recording {stamp} for {OpenLife.TotalMinutes:0.#} min; it is taken as ended");
+        bool want = open || _jobs.Values.Any(e => !e.Finished);
+        lock (_warmLock) // held over the call, so a "load" and a "let go" reach the models in the order they were decided
         {
             if (want == _warmNow) return;
             _warmNow = want;
+            try { _warm?.Invoke(want); }
+            catch (Exception ex) { HuginnLog.Write("worker: could not load or release the models", ex); }
         }
-        try { _warm?.Invoke(want); }
-        catch (Exception ex) { HuginnLog.Write("worker: could not load or release the models", ex); }
     }
 
     // Finished jobs are kept for the sender to read; the oldest go once there are many.
@@ -462,6 +508,7 @@ internal sealed class MeetingWorker : IDisposable
     public void Dispose()
     {
         try { _stop.Cancel(); } catch { /* already */ }
+        _sweep?.Dispose();
         _queue.Writer.TryComplete();
         foreach (var l in _listeners) { try { l.Stop(); } catch { /* already */ } }
     }

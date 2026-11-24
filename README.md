@@ -172,7 +172,8 @@ Dictation never leaves the computer you speak into.
    Register-ScheduledTask -TaskName 'Huginn Worker' -Action $run -Trigger (New-ScheduledTaskTrigger -AtStartup) -Settings $set -User 'SYSTEM' -RunLevel Highest
    ```
    `-Priority 4` matters: a task's default is 7, which starts the program below normal priority for the CPU and at
-   low priority for the disk and for memory. The program's first log line says the priority it got.
+   low priority for the disk and for memory. Any busy program beside it then starves it: it answers half a minute
+   late and takes minutes to load a model. The program's first log line says the priority it got.
    If the network comes up after the program, it tries the addresses again every 15 seconds.
 5. Let the recording computer in through the firewall, and nobody else:
    ```powershell
@@ -180,8 +181,9 @@ Dictation never leaves the computer you speak into.
    ```
 
 Its data folder holds `huginn.log` (every job, with how many times faster than real time it ran: a low number means
-the GPU is not being used; an answer that took over 2 seconds; a pause of the whole program of over 5 seconds, which
-is the computer sleeping or giving the program no time), the models, and `Meetings/` with a full copy of each meeting it processed. The copies
+the GPU is not being used; a request that was read over 2 seconds after the recording computer sent it, or took
+that long to read or to answer; a pause of the whole program of over 5 seconds, which is the computer sleeping or
+giving the program no time), the models, and `Meetings/` with a full copy of each meeting it processed. The copies
 are deleted, audio and text alike, once older than the "Keep meeting audio" setting (two weeks unless `keep_audio.txt`
 there says otherwise). Writing a file named `quit.flag` into the data folder stops the program.
 

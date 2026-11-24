@@ -367,6 +367,32 @@ public class WorkerTests
     }
 
     [Fact]
+    public void TheLogSaysHowLongARequestWasOnItsWay()
+    {
+        MeetingWorker.Processor none = (_, _, _) => throw new InvalidOperationException();
+        var worker = new MeetingWorker(new[] { "127.0.0.1" }, 1, Key, TestData.NewDir(), 0, none);
+        var now = new DateTimeOffset(2026, 11, 2, 9, 30, 0, TimeSpan.Zero);
+        string Sent(double secondsAgo) => (now.ToUnixTimeMilliseconds() - (long)(secondsAgo * 1000)).ToString();
+
+        // The sender's clock runs 7 s behind this one: every request looks 7 s old, and that is not a wait.
+        Assert.Equal(0, worker.WaitBeforeRead(Sent(7.0), now));
+        Assert.Equal(0.0, worker.WaitBeforeRead(Sent(7.0), now)!.Value, 3);
+        // One that really sat for 29 s before it was read.
+        Assert.Equal(29.0, worker.WaitBeforeRead(Sent(36.0), now)!.Value, 3);
+        Assert.Null(worker.WaitBeforeRead(null, now));        // a sender that gives no time
+        Assert.Null(worker.WaitBeforeRead("yesterday", now));
+
+        var slow = TimeSpan.FromSeconds(2);
+        TimeSpan S(double s) => TimeSpan.FromSeconds(s);
+        Assert.Null(MeetingWorker.SlowLine("GET", "/hello", 0.01, S(0.001), S(0.002), slow));
+        Assert.Null(MeetingWorker.SlowLine("PUT", "/jobs/x/files/them.wav", 0.01, S(0.001), S(40), slow)); // a big file
+        Assert.Equal("worker: POST /meetings/x/started: read 29.0 s after the sender sent it, 0.0 s between this program taking the connection and reading the request, 0.0 s to answer",
+            MeetingWorker.SlowLine("POST", "/meetings/x/started", 29.0, S(0.001), S(0.002), slow));
+        Assert.Equal("worker: GET /hello: 15.7 s between this program taking the connection and reading the request, 0.1 s to answer",
+            MeetingWorker.SlowLine("GET", "/hello", null, S(15.7), S(15.8), slow));
+    }
+
+    [Fact]
     public void AWorkerNeedsASecretAndOneAddress()
     {
         MeetingWorker.Processor none = (_, _, _) => throw new InvalidOperationException();

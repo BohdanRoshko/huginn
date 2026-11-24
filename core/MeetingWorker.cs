@@ -32,6 +32,8 @@ namespace Huginn;
 internal sealed class MeetingWorker : IDisposable
 {
     public const string KeyHeader = "X-Huginn-Key";
+    /// <summary>When the sender sent the request, by its own clock (Unix milliseconds). Only read for the log.</summary>
+    public const string SentHeader = "X-Huginn-Sent";
     public const string StampFormat = "yyyy-MM-dd_HHmmss";
     /// <summary>The files a job may bring, by the name each has after the recording's stamp.</summary>
     public static readonly string[] FileNames = { "me.wav", "them.wav", "speakers.json", "source.txt", "notes.md", "dictionary.txt" };
@@ -84,6 +86,7 @@ internal sealed class MeetingWorker : IDisposable
     private readonly ConcurrentDictionary<string, byte> _receiving = new();     // stamps with a file arriving now
     private System.Threading.Timer? _sweep, _pulse;
     private long _pulseAt;
+    private readonly Queue<double> _clockGaps = new(); // sender's clock against this one, the last requests
 
     /// <summary>How long a recording counts as running after the sender's last word about it. The sender says it
     /// every minute, so a recording that ended with no word (the sender was closed, the cable was pulled) stops
@@ -163,11 +166,43 @@ internal sealed class MeetingWorker : IDisposable
             catch (Exception) when (_stop.IsCancellationRequested) { break; }
             catch (ObjectDisposedException) { break; }
             catch (Exception ex) { HuginnLog.Write("worker: accept failed", ex); continue; }
-            _ = Task.Run(() => HandleAsync(client));
+            long at = System.Diagnostics.Stopwatch.GetTimestamp();
+            _ = Task.Run(() => HandleAsync(client, at));
         }
     }
 
-    private async Task HandleAsync(TcpClient client)
+    /// <summary>
+    /// How long a request was on its way before this program read it: the sender's clock at sending against this
+    /// computer's clock at reading. Two clocks never agree, so the smallest difference of the last requests counts
+    /// as "no wait" and only what is above it is a wait. Null when the sender gave no time.
+    /// </summary>
+    internal double? WaitBeforeRead(string? sentUnixMs, DateTimeOffset readAt)
+    {
+        if (!long.TryParse(sentUnixMs, NumberStyles.None, CultureInfo.InvariantCulture, out var sent)) return null;
+        double gap = (readAt.ToUnixTimeMilliseconds() - sent) / 1000.0;
+        lock (_clockGaps)
+        {
+            _clockGaps.Enqueue(gap);
+            while (_clockGaps.Count > 64) _clockGaps.Dequeue();
+            return gap - _clockGaps.Min();
+        }
+    }
+
+    /// <summary>The log line for a request that was slow to arrive, to be read or to be answered; null for one that was not.</summary>
+    internal static string? SlowLine(string method, string path, double? onItsWay, TimeSpan read, TimeSpan answered, TimeSpan slow)
+    {
+        bool late = onItsWay > slow.TotalSeconds, slowRead = read > slow;
+        // A file takes as long as it is big; any other answer should take no time.
+        bool slowAnswer = method != "PUT" && answered - read > slow;
+        if (!late && !slowRead && !slowAnswer) return null;
+        var parts = new List<string>();
+        if (onItsWay != null) parts.Add($"read {onItsWay:F1} s after the sender sent it");
+        parts.Add($"{read.TotalSeconds:F1} s between this program taking the connection and reading the request");
+        parts.Add($"{(answered - read).TotalSeconds:F1} s to answer");
+        return $"worker: {method} {path}: {string.Join(", ", parts)}";
+    }
+
+    private async Task HandleAsync(TcpClient client, long acceptedAt)
     {
         using var _ = client;
         try
@@ -176,9 +211,9 @@ internal sealed class MeetingWorker : IDisposable
             var stream = client.GetStream();
             int status;
             object? body = null;
-            var took = System.Diagnostics.Stopwatch.StartNew();
             var req = await ReadHeadAsync(stream).ConfigureAwait(false);
-            var read = took.Elapsed;
+            var read = System.Diagnostics.Stopwatch.GetElapsedTime(acceptedAt);
+            double? onItsWay = req == null ? null : WaitBeforeRead(req.Headers.GetValueOrDefault(SentHeader), DateTimeOffset.UtcNow);
             if (req == null) status = 400;
             else
             {
@@ -196,9 +231,8 @@ internal sealed class MeetingWorker : IDisposable
             send.CancelAfter(HeadTime);
             await stream.WriteAsync(Encoding.ASCII.GetBytes(head), send.Token).ConfigureAwait(false);
             if (json.Length > 0) await stream.WriteAsync(json, send.Token).ConfigureAwait(false);
-            // A file takes as long as it is big; any other answer, or any request's first lines, should take no time.
-            if (req != null && (read > SlowAnswer || (req.Method != "PUT" && took.Elapsed > SlowAnswer)))
-                HuginnLog.Write($"worker: {req.Method} {req.Path} took {took.Elapsed.TotalSeconds:F1} s to answer ({read.TotalSeconds:F1} s of it until the request was read)");
+            if (req != null && SlowLine(req.Method, req.Path, onItsWay, read, System.Diagnostics.Stopwatch.GetElapsedTime(acceptedAt), SlowAnswer) is { } slowLine)
+                HuginnLog.Write(slowLine);
             // A refused request may still have body bytes on their way. Closing with them unread resets the
             // connection and can take the answer with it, so say "no more from me" and read a little first.
             client.Client.Shutdown(SocketShutdown.Send);

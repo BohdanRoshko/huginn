@@ -29,7 +29,7 @@ internal sealed class WorkerClient : IDisposable
 
     public WorkerClient(string url, string key)
     {
-        _http = new HttpClient(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(4), UseProxy = false })
+        _http = new HttpClient(new SentAt(new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromSeconds(4), UseProxy = false }))
         {
             BaseAddress = new Uri(url.TrimEnd('/') + "/"),
             Timeout = Timeout.InfiniteTimeSpan,
@@ -270,6 +270,16 @@ internal sealed class WorkerClient : IDisposable
     };
 
     public void Dispose() => _http.Dispose();
+
+    // Writes this computer's time into every request, so the other computer's log can say how long one was on its way.
+    private sealed class SentAt(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            request.Headers.TryAddWithoutValidation(MeetingWorker.SentHeader, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+            return base.SendAsync(request, ct);
+        }
+    }
 
     // Passes reads through and notes when the last one was, so a stalled upload can be told from a slow one.
     private sealed class WatchedStream(Stream inner) : Stream

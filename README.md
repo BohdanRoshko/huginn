@@ -19,6 +19,7 @@ core/      Huginn.Core: every decision. Transcription, speech chunks, echo gates
            notes stamps, and HuginnEngine (the state machine both apps run). Platform.cs is the contract each OS fills.
 windows/   The Windows shell: WinForms tray app, NAudio capture (WaveIn mic, WASAPI loopback), keyboard hook, paste.
 mac/       The Mac shell: AppKit menu bar app, AVCaptureSession mic, ScreenCaptureKit system audio, CGEvent-tap key, paste.
+worker/    Huginn.Worker: a program with no window that transcribes meetings for a Huginn on another computer.
 tests/     Tests for the core (xunit). They run on Windows and macOS in CI.
 ```
 
@@ -110,11 +111,81 @@ Right-click the tray dot for the menu. Hold **Left Ctrl + Space** to dictate; **
 
 Not on the Mac: pausing music while you dictate (macOS has no public API for it).
 
+## Transcribing on another computer
+
+Transcribing a meeting loads a 1.6 GB model onto the GPU and keeps the GPU busy for a while. If a second computer
+with a GPU sits on the same network, it can do that work: the computer you record on then loads no model when a
+recording starts, and none when it ends.
+
+How it goes, with `WorkerUrl` set:
+
+1. **Record.** Huginn tells the other computer a recording began. That computer loads the models and keeps them.
+   If it does not answer, Huginn loads them itself, as it does with no `WorkerUrl`.
+2. **Stop.** The audio stays in this computer's `Meetings/` as always. Huginn sends both WAV tracks, the speaker
+   timeline, the source, the notes and the dictionary, with your name, the talk level and the language. The files
+   are streamed from disk (an hour of meeting is about 1.5 GB).
+3. The other computer transcribes both tracks, removes the echo, names the speakers and names the meeting, with the
+   same code Huginn runs (`MeetingJob` in the core). It does one meeting at a time; the next one waits.
+4. Huginn takes the transcript, the raw transcript and the name, writes them into its own `Meetings/`, and carries
+   on as always: the recent list, Odin, the snapshots, the audio cleanup. The row's last chip says **other computer**.
+5. If the other computer cannot be reached, fails, or stops answering for a minute, Huginn transcribes the meeting
+   itself and the chip says **this computer**. `huginn.log` says why.
+
+Dictation never leaves the computer you speak into.
+
+**On the computer that records**, in `settings.json` (restart Huginn after editing):
+
+```json
+"WorkerUrl": "http://192.168.1.20:47822",
+"WorkerKey": "the same secret as in worker.json"
+```
+
+**On the other computer** (Windows x64; it needs a GPU driver with Vulkan, and nothing else installed):
+
+1. Build the program on any computer with the .NET 10 SDK. It carries its own .NET:
+   ```powershell
+   dotnet publish worker/Huginn.Worker.csproj -c Release -r win-x64 --self-contained true -o publish/Huginn.Worker
+   ```
+   Copy `publish/Huginn.Worker` over, for example to `D:\HuginnWorker\app`.
+2. Make a data folder, for example `D:\HuginnWorker\data`, and put `worker.json` into it:
+   ```json
+   {
+     "Listen": ["192.168.1.20"],
+     "Port": 47822,
+     "Key": "a secret of 16 characters or more"
+   }
+   ```
+   `Listen` holds addresses of that computer. The program opens the port on those addresses and on no other;
+   `0.0.0.0` is refused. Every request must carry the key, or it is answered 401.
+3. Run it: `D:\HuginnWorker\app\Huginn.Worker.exe --data D:\HuginnWorker\data` (or set `HUGINN_DATA_DIR`). The data folder
+   is required. On its first start it downloads the Whisper model (1.6 GB) and the text model that names meetings
+   (2 GB) into the data folder; copying them from a Huginn data folder saves the download.
+4. To start it when the computer boots, with nobody signed in, register a task that runs as SYSTEM (an elevated
+   PowerShell). A task, not a service: a task runs the program as it is, a service would need service code in it.
+   ```powershell
+   $run = New-ScheduledTaskAction -Execute 'D:\HuginnWorker\app\Huginn.Worker.exe' -Argument '--data D:\HuginnWorker\data'
+   $set = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+   Register-ScheduledTask -TaskName 'Huginn Worker' -Action $run -Trigger (New-ScheduledTaskTrigger -AtStartup) -Settings $set -User 'SYSTEM' -RunLevel Highest
+   ```
+   If the network comes up after the program, it tries the addresses again every 15 seconds.
+5. Let the recording computer in through the firewall, and nobody else:
+   ```powershell
+   New-NetFirewallRule -DisplayName 'Huginn Worker' -Direction Inbound -Protocol TCP -LocalPort 47822 -RemoteAddress 192.168.1.10 -Action Allow
+   ```
+
+Its data folder holds `huginn.log` (every job, with how many times faster than real time it ran: a low number means
+the GPU is not being used), the models, and `Meetings/` with a full copy of each meeting it processed. The copies
+are deleted, audio and text alike, once older than the "Keep meeting audio" setting (two weeks unless `keep_audio.txt`
+there says otherwise). Writing a file named `quit.flag` into the data folder stops the program.
+
+The two computers talk plain HTTP: the key and the audio cross the network unencrypted. Use it on a network you trust.
+
 ## Building
 
 - **Windows:** `dotnet build -c Release` in `windows/` (needs the .NET 10 SDK). Output
   `windows\bin\Release\net10.0-windows10.0.19041.0\Huginn.exe`. GPU through Vulkan (the NVIDIA driver is enough).
 - **Tests:** `dotnet test tests/Huginn.Core.Tests`.
+- **Worker:** `dotnet build worker/Huginn.Worker.csproj -c Release`; see "Transcribing on another computer" for the publish.
 - **Mac:** GitHub Actions is the compiler (no Mac on the authoring side). Push to `main`; the **Huginn** workflow tests
   the core on both systems, builds both apps, runs the shipped Mac app headless (`HUGINN_SELFTEST=transcribe` pushes
   synthesized speech through dictation and the full meeting pipeline; `capture` records a real meeting on the

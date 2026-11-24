@@ -7,7 +7,7 @@ name: Huginn
 on:
   push:
     branches: [main]
-    paths: ['core/**', 'mac/**', 'windows/**', 'tests/**', 'Huginn.sln', '.github/workflows/huginn.yml']
+    paths: ['core/**', 'mac/**', 'windows/**', 'worker/**', 'tests/**', 'Huginn.sln', '.github/workflows/huginn.yml']
   workflow_dispatch:
     inputs:
       release:
@@ -32,6 +32,8 @@ jobs:
         run: dotnet test tests/Huginn.Core.Tests -c Release
       - name: Build the Windows app
         run: dotnet build windows/Huginn.csproj -c Release
+      - name: Build the worker
+        run: dotnet build worker/Huginn.Worker.csproj -c Release
 
       # Framework-dependent (needs the .NET 10 Desktop Runtime): a self-contained publish flattens the cleanup LLM's
       # per-CPU native folders into one and fails. Other systems' native libraries are dropped to keep the zip small.

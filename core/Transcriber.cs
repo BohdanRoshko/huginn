@@ -46,6 +46,10 @@ internal sealed class Transcriber : IAsyncDisposable
 
     private Task? _loading;
 
+    /// <summary>The warm-up loads the small preview model too. Dictation shows a live preview; a computer that only
+    /// transcribes meetings has no use for it.</summary>
+    public bool WithPreview { get; init; } = true;
+
     public Transcriber(string modelPath, string vadModelPath, string previewModelPath)
     {
         _modelPath = modelPath;
@@ -81,6 +85,7 @@ internal sealed class Transcriber : IAsyncDisposable
         silent.Position = 0;
         try { await HasSpeechAsync(silent).ConfigureAwait(false); } catch { /* VAD optional — falls back to no gate */ }
         // Prime the fast preview model (download + load) so the first live-preview tick is instant.
+        if (!WithPreview) return;
         silent.Position = 0;
         try { await TranscribePreviewAsync(silent).ConfigureAwait(false); } catch { /* preview optional */ }
     }
@@ -133,8 +138,10 @@ internal sealed class Transcriber : IAsyncDisposable
     /// its own, and <see cref="SpeechChunker.Tidy"/> collapses what still repeats. Without a usable VAD the
     /// track goes through whole, as before.
     /// </summary>
-    public async Task<IReadOnlyList<TranscriptSegment>> TranscribeSegmentsAsync(Stream wavStream, CancellationToken ct = default)
+    /// <param name="o">The language, prompt, threads and rest of this job; null = this computer's settings.</param>
+    public async Task<IReadOnlyList<TranscriptSegment>> TranscribeSegmentsAsync(Stream wavStream, CancellationToken ct = default, MeetingOptions? o = null)
     {
+        int rest = o?.RestPercent ?? Config.MeetingRestPercent;
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -143,7 +150,7 @@ internal sealed class Transcriber : IAsyncDisposable
             var segs = new List<TranscriptSegment>();
             // ONE processor per track: each chunk is a standalone WAV slice fed to it (a processor per chunk
             // would pay a whisper state, ~2 s of GPU setup, per chunk).
-            await using var processor = MeetingBuilder().Build();
+            await using var processor = MeetingBuilder(o).Build();
             if (chunks == null)
             {
                 wavStream.Position = 0;
@@ -158,7 +165,7 @@ internal sealed class Transcriber : IAsyncDisposable
                     var work = Stopwatch.StartNew();
                     using var slice = WavSlice.Slice(bytes, dataOffset, dataLength, start, end);
                     await CollectAsync(processor, slice, start, segs, ct).ConfigureAwait(false);
-                    await RestAsync(work.Elapsed, ct).ConfigureAwait(false);
+                    await RestAsync(work.Elapsed, rest, ct).ConfigureAwait(false);
                 }
             }
             else
@@ -167,9 +174,9 @@ internal sealed class Transcriber : IAsyncDisposable
                 {
                     var work = Stopwatch.StartNew();
                     wavStream.Position = 0;
-                    await using var chunkProcessor = MeetingBuilder().WithOffset(start).WithDuration(end - start).Build();
+                    await using var chunkProcessor = MeetingBuilder(o).WithOffset(start).WithDuration(end - start).Build();
                     await CollectAsync(chunkProcessor, wavStream, TimeSpan.Zero, segs, ct).ConfigureAwait(false);
-                    await RestAsync(work.Elapsed, ct).ConfigureAwait(false);
+                    await RestAsync(work.Elapsed, rest, ct).ConfigureAwait(false);
                 }
             }
             var tidy = SpeechChunker.Tidy(segs);
@@ -183,17 +190,19 @@ internal sealed class Transcriber : IAsyncDisposable
         }
     }
 
-    private WhisperProcessorBuilder MeetingBuilder()
+    private WhisperProcessorBuilder MeetingBuilder(MeetingOptions? o)
     {
-        var builder = _factory!.CreateBuilder().WithLanguage(Config.Language);
-        if (Config.MeetingThreads > 0) builder = builder.WithThreads(Config.MeetingThreads);
-        if (!string.IsNullOrEmpty(InitialPrompt)) builder = builder.WithPrompt(InitialPrompt);
+        var builder = _factory!.CreateBuilder().WithLanguage(o?.Language ?? Config.Language);
+        int threads = o?.Threads ?? Config.MeetingThreads;
+        if (threads > 0) builder = builder.WithThreads(threads);
+        var prompt = o != null ? o.Prompt : InitialPrompt;
+        if (!string.IsNullOrEmpty(prompt)) builder = builder.WithPrompt(prompt);
         return builder;
     }
 
     // Gives the GPU and CPU back to the desktop between chunks, so a video does not stall during a long job.
-    private static Task RestAsync(TimeSpan work, CancellationToken ct) =>
-        Config.MeetingRestPercent > 0 ? Task.Delay(work * (Config.MeetingRestPercent / 100.0), ct) : Task.CompletedTask;
+    private static Task RestAsync(TimeSpan work, int percent, CancellationToken ct) =>
+        percent > 0 ? Task.Delay(work * (percent / 100.0), ct) : Task.CompletedTask;
 
     private static async Task CollectAsync(WhisperProcessor processor, Stream wav, TimeSpan offset, List<TranscriptSegment> into, CancellationToken ct)
     {

@@ -26,7 +26,8 @@ internal sealed record EchoReport(int MeLines, int RemovedSilent, int RemovedUnh
 /// </summary>
 internal static class MeetingProcessor
 {
-    public static async Task<MeetingResult> TranscribeAsync(MeetingCapture cap, Transcriber transcriber, CancellationToken ct = default)
+    /// <param name="o">The settings of this job; null = this computer's, as a meeting recorded here is processed.</param>
+    public static async Task<MeetingResult> TranscribeAsync(MeetingCapture cap, Transcriber transcriber, CancellationToken ct = default, MeetingOptions? o = null)
     {
         var me = new List<TranscriptSegment>();
         var them = new List<TranscriptSegment>();
@@ -36,28 +37,36 @@ internal static class MeetingProcessor
             using var wav = OpenAsWhisperWav(cap.MicPath);
             micEnv = EchoGate.Envelope(wav);
             wav.Position = 0;
-            me.AddRange(await transcriber.TranscribeSegmentsAsync(wav, ct).ConfigureAwait(false));
+            me.AddRange(await transcriber.TranscribeSegmentsAsync(wav, ct, o).ConfigureAwait(false));
         }
         if (HasAudio(cap.LoopPath))
         {
             using var wav = OpenAsWhisperWav(cap.LoopPath);
             loopEnv = EchoGate.Envelope(wav);
             wav.Position = 0;
-            them.AddRange(await transcriber.TranscribeSegmentsAsync(wav, ct).ConfigureAwait(false));
+            them.AddRange(await transcriber.TranscribeSegmentsAsync(wav, ct, o).ConfigureAwait(false));
         }
 
         var timeline = SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp));
-        var (text, rawText, echo, lines) = Compose(me, them, micEnv, loopEnv, timeline, cap.StartedLocal, ReadSource(cap.Stamp), cap.Stamp);
+        var (text, rawText, echo, lines) = Compose(me, them, micEnv, loopEnv, timeline, cap.StartedLocal, ReadSource(cap.Stamp), cap.Stamp, o);
 
-        var transcriptPath = TranscriptPathFor(cap.Stamp, null);
+        var (transcriptPath, rawPath) = await SaveAsync(cap.Stamp, text, echo.Removed > 0 ? rawText : null, ct).ConfigureAwait(false);
+        return new MeetingResult(transcriptPath, text, lines, cap.MicPath, cap.LoopPath, rawPath, echo);
+    }
+
+    /// <summary>Writes a meeting's transcript, and the untouched interleave when there is one, into the meetings
+    /// folder. A transcript made on another computer is saved through here too, so both land the same way.</summary>
+    public static async Task<(string TranscriptPath, string? RawPath)> SaveAsync(string stamp, string text, string? rawText, CancellationToken ct = default)
+    {
+        var transcriptPath = TranscriptPathFor(stamp, null);
         await File.WriteAllTextAsync(transcriptPath, text, new UTF8Encoding(false), ct).ConfigureAwait(false);
         string? rawPath = null;
-        if (echo.Removed > 0)
+        if (rawText != null)
         {
-            rawPath = Path.Combine(Paths.MeetingsDir(), $"{cap.Stamp}_transcript.raw.txt");
+            rawPath = Path.Combine(Paths.MeetingsDir(), $"{stamp}_transcript.raw.txt");
             await File.WriteAllTextAsync(rawPath, rawText, new UTF8Encoding(false), ct).ConfigureAwait(false);
         }
-        return new MeetingResult(transcriptPath, text, lines, cap.MicPath, cap.LoopPath, rawPath, echo);
+        return (transcriptPath, rawPath);
     }
 
     /// <summary>Turns the two tracks' segments into the transcript: drops the "Me" lines that are not the user,
@@ -65,13 +74,14 @@ internal static class MeetingProcessor
     /// same text. Returns the transcript, the untouched interleave, what the echo gates did, and the line count.</summary>
     internal static (string Text, string RawText, EchoReport Echo, int Lines) Compose(
         IReadOnlyList<TranscriptSegment> me, IReadOnlyList<TranscriptSegment> them, float[]? micEnv, float[]? loopEnv,
-        SpeakerTimeline? timeline, DateTime startedLocal, string? source, string stamp)
+        SpeakerTimeline? timeline, DateTime startedLocal, string? source, string stamp, MeetingOptions? o = null)
     {
+        string userName = o?.UserName ?? Settings.UserName;
         // On speakers most "Me" lines are the far side again, and Whisper invents lines on silence. Two acoustic
         // gates, then the text pass; each keeps what it cannot prove. The untouched interleave is kept as .raw.
         bool kumo = timeline != null && timeline.HasKumospace;
         var toMeeting = kumo ? MeetingClock(timeline!, loopEnv, stamp) : t => t;
-        double talk = HuginnSettings.Current.KumoTalkLevel;
+        double talk = o?.TalkLevel ?? HuginnSettings.Current.KumoTalkLevel;
         var verdict = EchoGate.Judge(me, micEnv, loopEnv, kumo ? (s, e) => timeline!.HeardMe(toMeeting(s), toMeeting(e), talk) : null);
         var all = new List<(TimeSpan start, string speaker, string text)>();
         var kept = new List<(TimeSpan start, string speaker, string text)>();
@@ -107,9 +117,9 @@ internal static class MeetingProcessor
         {
             var spans = kept.Where(k => k.speaker == "Them")
                 .Select(k => (toMeeting(k.start), toMeeting(themEnds.GetValueOrDefault((k.start, k.text), k.start)))).ToList();
-            text = NameSpeakers(text, spans, timeline!, stamp);
+            text = NameSpeakers(text, spans, timeline!, stamp, talk, userName);
         }
-        else text = NameMe(text, Settings.UserName);
+        else text = NameMe(text, userName);
         if (timeline != null && timeline.Events.Count > 0) text = AddEvents(text, timeline.Events);
         var echo = new EchoReport(me.Count, verdict.Silent, verdict.Unheard, verdict.Echo + theirWords, reconciled.RemovedEchoes, verdict.LagMs, verdict.LagEndMs, verdict.Matched, verdict.Pieces);
         return (text, rawText, echo, kept.Count - reconciled.RemovedEchoes);
@@ -252,9 +262,11 @@ internal static class MeetingProcessor
     /// <summary>Replaces each "Them" line's label with the person Kumospace heard talking at that time. The text pass
     /// removes only "Me" lines, so the n-th "Them" line of <paramref name="text"/> is the n-th of <paramref name="themSpans"/>.
     /// A line with no clear speaker stays "Them". The header names the rooms and the people.</summary>
-    internal static string NameSpeakers(string text, List<(TimeSpan start, TimeSpan end)> themSpans, SpeakerTimeline tl, string stamp)
+    internal static string NameSpeakers(string text, List<(TimeSpan start, TimeSpan end)> themSpans, SpeakerTimeline tl, string stamp,
+        double? talkLevel = null, string? userName = null)
     {
-        var talk = HuginnSettings.Current.KumoTalkLevel;
+        var talk = talkLevel ?? HuginnSettings.Current.KumoTalkLevel;
+        userName ??= Settings.UserName;
         var lines = text.Replace("\r\n", "\n").Split('\n');
         int themCount = lines.Count(l => ThemLine.IsMatch(l));
         if (themCount != themSpans.Count)
@@ -280,7 +292,7 @@ internal static class MeetingProcessor
             if (!lines[i].StartsWith("# Tracks:")) continue;
             var where = tl.Rooms.Count > 0 ? string.Join(", ", tl.Rooms) : "outside a room";
             var people = tl.People.Count > 0 ? string.Join(", ", tl.People) : "nobody recorded";
-            var me = tl.Me ?? (Settings.UserName.Length > 0 ? Settings.UserName.Replace(".", " ").Trim() : "the microphone");
+            var me = tl.Me ?? (userName.Length > 0 ? userName.Replace(".", " ").Trim() : "the microphone");
             // Another app's talk samples (Meet) have no rooms, and the app shows who talks; it does not hear them.
             lines[i] = tl.App == null
                 ? $"# Kumospace: {where} · with {people}\n"

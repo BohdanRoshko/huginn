@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Transcribes meetings for a Huginn on another computer of the same network. No window: it listens on the
+       addresses its worker.json gives, takes a recording's files, runs the same processing the app runs
+       (Huginn.Core) and hands back the transcript and the meeting's name. See the README. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Huginn.Worker</AssemblyName>
+    <RootNamespace>Huginn</RootNamespace>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\core\Huginn.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The same native libraries the Windows app uses: Whisper on the GPU through Vulkan (needs only the GPU
+         driver), the CPU runtime as the fallback, and the local text model that names a meeting. -->
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <!-- The text model's libraries come one folder per CPU kind (avx, avx2, …, vulkan), all with the same file
+         names. A publish for one system (-r win-x64) puts native libraries side by side and fails on the equal
+         names, so NuGet's own copy is off here and the folders are copied as they are. -->
+    <PackageReference Include="LLamaSharp.Backend.Vulkan.Windows" Version="0.25.0" ExcludeAssets="native" GeneratePathProperty="true" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.25.0" ExcludeAssets="native" GeneratePathProperty="true" />
+    <None Include="$(PkgLLamaSharp_Backend_Vulkan_Windows)\runtimes\win-x64\native\**;$(PkgLLamaSharp_Backend_Cpu)\runtimes\win-x64\native\**"
+          Link="runtimes\win-x64\native\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
+</Project>

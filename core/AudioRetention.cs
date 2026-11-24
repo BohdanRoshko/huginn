@@ -103,6 +103,42 @@ internal static class AudioRetention
         return new Result(meetings, files, bytes, noTranscript, noTranscriptBytes, busyCount, failed);
     }
 
+    private static readonly Regex AnyFile = new(@"^(\d{4}-\d{2}-\d{2}_\d{6})_", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// For a computer that holds only a COPY of each meeting (it transcribes for another computer, which keeps the
+    /// originals): deletes every file of a meeting that started before the cutoff, the audio and the text alike,
+    /// with or without a transcript. Same setting and same cutoffs as <see cref="Clean"/>.
+    /// </summary>
+    public static (int Meetings, int Files, long Bytes, int Failed) CleanCopies(string dir, string key, DateTime now, Func<string, bool> busy)
+    {
+        int files = 0, failed = 0;
+        long bytes = 0;
+        var gone = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!Directory.Exists(dir)) return (0, 0, 0, 0);
+        var cutoff = CutoffFor(key, now);
+        foreach (var f in new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.TopDirectoryOnly))
+        {
+            var m = AnyFile.Match(f.Name);
+            if (!m.Success) continue;
+            var stamp = m.Groups[1].Value;
+            if (!DateTime.TryParseExact(stamp, "yyyy-MM-dd_HHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var started)) continue;
+            if (started >= cutoff || busy(stamp)) continue;
+            try
+            {
+                long len = f.Length;
+                f.Delete();
+                files++; bytes += len; gone.Add(stamp);
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                HuginnLog.Write($"meeting copies: could not delete {f.Name}", ex);
+            }
+        }
+        return (gone.Count, files, bytes, failed);
+    }
+
     /// <summary>The meeting's transcript is on disk and not empty: <c>{stamp}_transcript.txt</c>, or the file it was
     /// renamed to (<c>{stamp}_{name}.txt</c>). The source note and the raw transcript do not count.</summary>
     public static bool HasTranscript(string dir, string stamp)

@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Huginn" />
+    <InternalsVisibleTo Include="Huginn.Worker" />
     <InternalsVisibleTo Include="Huginn.Core.Tests" />
   </ItemGroup>
 

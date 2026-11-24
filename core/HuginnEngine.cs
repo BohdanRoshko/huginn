@@ -22,6 +22,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private readonly ConcurrentDictionary<int, CancellationTokenSource> _jobCts = new();
     private readonly KumoWatcher _kumo;
     private readonly MeetBridge _meet = new(HuginnSettings.Current.MeetBridgePort);
+    private readonly WorkerClient? _worker = WorkerClient.FromSettings(); // another computer transcribes the meetings; null = this one
     private readonly KumoMeetingDetector _detector;
     private readonly ConcurrentQueue<KumoSnapshot> _kumoReads = new();
     private readonly PresenceLog _presence = new(Paths.PresenceDir());
@@ -152,6 +153,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     public void Start()
     {
         HuginnLog.Write($"Huginn started ({Environment.OSVersion.Platform}, {(DictationEnabled ? "dictation on" : "dictation off")})");
+        if (_worker != null) HuginnLog.Write($"worker: meetings are sent to the other computer at {HuginnSettings.Current.WorkerUrl.Trim()}");
         StartQuitWatcher();
         _meet.Start();
         _ = NameUnnamedAsync();
@@ -554,8 +556,9 @@ internal sealed class HuginnEngine : IAsyncDisposable
         }
         HidePrompt(); // a recording is starting, whoever started it: the pop-up has nothing left to ask
         _meetingActive = true;
-        _transcriber.KeepWarm = true; // load now, so Stop finds the model in memory
-        _ = _transcriber.EnsureLoadedAsync();
+        _transcriber.KeepWarm = true; // a model in memory stays there until Stop
+        // Load now, so Stop finds the model in memory. With another computer set up, that one loads instead.
+        if (_worker == null) _ = _transcriber.EnsureLoadedAsync();
         if (_dictationOn) _p.Hotkey.Uninstall(); // free the mic and keys for the call; dictation pauses while recording
         var plan = MeetingCapture.Plan(DateTime.Now);
         try
@@ -574,6 +577,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             return;
         }
         _current = plan;
+        if (_worker != null) _ = WarmWorkerAsync(plan.Stamp);
         _source = null; // StartForCall / StartForKumo name the app right after this
         _timeline = SpeakerTimeline.Begin(plan.StartedLocal);
         _shell.SetTrayState(TrayState.Recording);
@@ -589,6 +593,19 @@ internal sealed class HuginnEngine : IAsyncDisposable
             if (_shell.OwnWindowActive) _p.Notes.FocusPad();
         }
         _shell.Refresh();
+    }
+
+    // The other computer loads the models while the meeting runs. If it does not answer, this one loads them, as
+    // it does with no other computer set up.
+    private async Task WarmWorkerAsync(string stamp)
+    {
+        if (await _worker!.MeetingStartedAsync(stamp))
+        {
+            HuginnLog.Write($"meeting {stamp}: the other computer loads the models; none load here");
+            return;
+        }
+        HuginnLog.Write($"meeting {stamp}: the models load here");
+        if (_meetingActive && _current?.Stamp == stamp) _ = _transcriber.EnsureLoadedAsync();
     }
 
     // Shared teardown for every stop: the capture is flushed and the UI is back to ready at once. The next
@@ -626,6 +643,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     {
         var cap = await EndMeetingAsync();
         DeleteCapture(cap);
+        if (cap != null) _ = _worker?.MeetingDroppedAsync(cap.Stamp);
         if (cap != null) HuginnLog.Write($"meeting {cap.Stamp}: discarded by the user, audio deleted");
         _p.Notes.Discarded();
         SetStatus("Recording discarded"); // no notification: the user just asked for it
@@ -764,21 +782,14 @@ internal sealed class HuginnEngine : IAsyncDisposable
         HuginnLog.Write($"meeting {cap.Stamp}: processing started (me={FileSize(cap.MicPath)}, them={FileSize(cap.LoopPath)}, notes={(notes == null ? "none" : $"{notes.Count(c => c == '\n') + 1} lines")})");
         try
         {
-            var r = await MeetingProcessor.TranscribeAsync(cap, _transcriber, cts.Token);
-            HuginnLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
-            HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {r.Echo}{(r.RawTranscriptPath == null ? "" : " (raw kept)")}");
-            Recent.SetTranscript(jobId, r.TranscriptPath);
-            // Without Odin the local model writes the only summary (and the name), so it is fetched once when it is
-            // not on disk yet: the dictation cleanup is off by default, so most people never got it.
-            if (!SendMeetings && !File.Exists(Paths.CleanupModelPath()))
-            {
-                Recent.SetStatus(jobId, "Getting the summary model…", JobTone.Busy, cancelable: true);
-                await _cleaner.PrepareAsync();
-            }
-            // A name made here, so the row is named even when Odin is off or files nothing; Odin's title replaces it.
-            var localName = await MeetingName.MakeAsync(r.Text, _cleaner);
-            Recent.SetTitle(jobId, localName);
-            HuginnLog.Write($"meeting {cap.Stamp}: named \"{localName}\" here");
+            // The transcript and the name: from the other computer when one is set up and it does the job, else made here.
+            var done = (_worker == null ? null : await ProcessOnWorkerAsync(cap, jobId, sw, cts.Token)) ?? await ProcessHereAsync(cap, jobId, sw, cts.Token);
+            var r = done.Transcript;
+            // With another computer set up, the row's last chip says which of the two did the work.
+            string where = _worker == null ? "" : done.Far ? " · other computer" : " · this computer";
+            // A name made by the local model, so the row is named even when Odin is off or files nothing; Odin's title replaces it.
+            Recent.SetTitle(jobId, done.Title);
+            HuginnLog.Write($"meeting {cap.Stamp}: named \"{done.Title}\" {(done.Far ? "on the other computer" : "here")}");
             Ui(() => _p.Notes.SetTranscriptReady(cap.Stamp));
             if (SendMeetings)
             {
@@ -791,7 +802,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                     if (!string.IsNullOrWhiteSpace(odin.Title)) Recent.SetTitle(jobId, odin.Title);
                     Recent.SetOdinSlug(jobId, odin.Slug);
                     await UploadShotsAsync(cap.Stamp, odin.Slug, cts.Token);
-                    Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
+                    Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s){where}", JobTone.Good, cancelable: false);
                     Ui(() => _p.Notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {odin.Title}"));
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
@@ -801,7 +812,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                     await SummarizeAsync(jobId, cap.Stamp, r.Text, notes, cts.Token); // Odin wrote none: the local one
                     // The row looks like any saved meeting: it has its local name, and Odin is never named on it
                     // (Bohdan, 2026-11-20). The notice below is the one place the failure shows.
-                    Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
+                    Recent.SetStatus(jobId, "Saved" + where, JobTone.Good, cancelable: false);
                     Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
                     _shell.Warn("Huginn — Odin not reachable", $"Saved the transcript to disk; file it later.\n{Path.GetFileName(r.TranscriptPath)}");
                     _shell.Reveal(Recent.TranscriptPathFor(cap.Stamp) ?? r.TranscriptPath);
@@ -810,7 +821,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             else
             {
                 await SummarizeAsync(jobId, cap.Stamp, r.Text, notes, cts.Token);
-                Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
+                Recent.SetStatus(jobId, "Saved" + where, JobTone.Good, cancelable: false);
                 Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
                 _shell.Reveal(Recent.TranscriptPathFor(cap.Stamp) ?? r.TranscriptPath);
             }
@@ -836,6 +847,63 @@ internal sealed class HuginnEngine : IAsyncDisposable
             UpdatePriority();
             _busyStamps.TryRemove(cap.Stamp, out _);
             _ = Task.Run(() => CleanAudio("after a transcription")); // "delete after transcription" acts here
+        }
+    }
+
+    /// <summary>A recording's transcript (on disk) and name, and whether the other computer made them.</summary>
+    private sealed record Processed(MeetingResultFiles Transcript, string Title, bool Far);
+
+    /// <summary>The transcript as the steps after it read it: the text and where it was written.</summary>
+    private sealed record MeetingResultFiles(string TranscriptPath, string Text);
+
+    // This computer transcribes and names the recording, as it does with no other computer set up.
+    private async Task<Processed> ProcessHereAsync(MeetingCapture cap, int jobId, Stopwatch sw, CancellationToken ct)
+    {
+        var job = await MeetingJob.RunAsync(cap, _transcriber, _cleaner, options: null, transcribed: async r =>
+        {
+            HuginnLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
+            HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {r.Echo}{(r.RawTranscriptPath == null ? "" : " (raw kept)")}");
+            Recent.SetTranscript(jobId, r.TranscriptPath);
+            // Without Odin the local model writes the only summary (and the name), so it is fetched once when it is
+            // not on disk yet: the dictation cleanup is off by default, so most people never got it.
+            if (!SendMeetings && !File.Exists(Paths.CleanupModelPath()))
+            {
+                Recent.SetStatus(jobId, "Getting the summary model…", JobTone.Busy, cancelable: true);
+                await _cleaner.PrepareAsync();
+            }
+        }, ct);
+        return new Processed(new MeetingResultFiles(job.Transcript.TranscriptPath, job.Transcript.Text), job.Title, Far: false);
+    }
+
+    // The other computer transcribes and names the recording; this one sends the files and writes what comes back.
+    // Null when it could not do it: the caller then processes the recording here.
+    private async Task<Processed?> ProcessOnWorkerAsync(MeetingCapture cap, int jobId, Stopwatch sw, CancellationToken ct)
+    {
+        void Show(string line) => Ui(() =>
+        {
+            Recent.SetStatus(jobId, line, JobTone.Busy, cancelable: true);
+            _p.Notes.SetJobStatus(cap.Stamp, line);
+        });
+        try
+        {
+            var files = new[]
+            {
+                ("me.wav", cap.MicPath), ("them.wav", cap.LoopPath), ("speakers.json", SpeakerTimeline.PathFor(cap.Stamp)),
+                ("source.txt", MeetingProcessor.SourcePathFor(cap.Stamp)), ("notes.md", cap.NotesPath), ("dictionary.txt", Paths.File("dictionary.txt")),
+            };
+            var far = await _worker!.ProcessAsync(cap.Stamp, cap.StartedLocal, files, MeetingOptions.Here(prompt: null), Show, ct);
+            var (path, rawPath) = await MeetingProcessor.SaveAsync(cap.Stamp, far.Text, far.RawText, ct);
+            HuginnLog.Write($"meeting {cap.Stamp}: transcribed {far.Lines} segments on the other computer, {TimeSpan.FromSeconds(far.Seconds):m\\:ss} there, {sw.Elapsed:m\\:ss} with the sending -> {Path.GetFileName(path)}");
+            HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {far.Echo}{(rawPath == null ? "" : " (raw kept)")}");
+            Recent.SetTranscript(jobId, path);
+            return new Processed(new MeetingResultFiles(path, far.Text), far.Title, Far: true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            HuginnLog.Write($"meeting {cap.Stamp}: the other computer did not do it ({ShortReason(ex)}); it is processed here");
+            Show("Transcribing…");
+            return null;
         }
     }
 
@@ -1184,6 +1252,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         {
             var cap = await EndMeetingAsync();
             DeleteCapture(cap);
+            if (cap != null) _ = _worker?.MeetingDroppedAsync(cap.Stamp);
             _p.Notes.Discarded();
             SetStatus($"Short chat not kept ({speech:F0} s of talk)");
             return;
@@ -1202,6 +1271,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         _quitWatcher?.Dispose();
         _kumoTimer?.Dispose();
         _audioTimer?.Dispose();
+        _worker?.Dispose();
         _meet.Dispose();
         _callTimer?.Dispose();
         _previewTimer?.Dispose();

@@ -36,6 +36,10 @@ internal sealed class HuginnSettings
     public double KumoMinSpeechSeconds { get; set; } = 20;  // an auto recording with less speech than this is deleted
     // The Huginn browser extension (Google Meet hands, reactions, chat) posts to 127.0.0.1 on this port; 0 = off.
     public int MeetBridgePort { get; set; } = 47821;
+    // Another computer on the network that transcribes the meetings (it runs Huginn.Worker), as "http://address:port",
+    // and the secret both sides hold. Empty address (the default) = this computer transcribes them.
+    public string WorkerUrl { get; set; } = "";
+    public string WorkerKey { get; set; } = "";
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 

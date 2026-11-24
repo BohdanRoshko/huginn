@@ -31,14 +31,21 @@ internal static class Dictionary
                         .Concat(Defaults));
                 return Defaults;
             }
-            var terms = File.ReadAllLines(path)
-                .Select(l => l.Trim())
-                .Where(l => l.Length > 0 && !l.StartsWith('#'))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            return terms.Count > 0 ? terms : Defaults;
+            return TermsOf(File.ReadAllLines(path));
         }
         catch { return Defaults; }
+    }
+
+    /// <summary>The terms in a dictionary file's lines (the defaults when it holds none). A job from another computer
+    /// brings its own dictionary file, read through here.</summary>
+    public static IReadOnlyList<string> TermsOf(IEnumerable<string> lines)
+    {
+        var terms = lines
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && !l.StartsWith('#'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return terms.Count > 0 ? terms : Defaults;
     }
 
     /// <summary>Comma-separated term list for the cleanup LLM's spelling-authority block.</summary>
@@ -46,9 +53,8 @@ internal static class Dictionary
 
     /// <summary>Initial prompt for Whisper — biases the decoder toward these spellings. whisper.cpp treats it
     /// as prior context, so a short glossary sentence works best.</summary>
-    public static string WhisperPrompt()
-    {
-        var terms = Terms();
-        return terms.Count == 0 ? "" : $"Glossary of terms: {string.Join(", ", terms)}.";
-    }
+    public static string WhisperPrompt() => WhisperPrompt(Terms());
+
+    public static string WhisperPrompt(IReadOnlyList<string> terms) =>
+        terms.Count == 0 ? "" : $"Glossary of terms: {string.Join(", ", terms)}.";
 }

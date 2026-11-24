@@ -62,6 +62,8 @@ internal sealed class MeetingWorker : IDisposable
 
     private static readonly Regex StampShape = new(@"^\d{4}-\d{2}-\d{2}_\d{6}$", RegexOptions.CultureInvariant);
     private static readonly TimeSpan OverKept = TimeSpan.FromHours(1);         // how long an ended recording is remembered
+    private static readonly TimeSpan SlowAnswer = TimeSpan.FromSeconds(2);     // an answer slower than this gets a log line
+    private static readonly TimeSpan StoodStill = TimeSpan.FromSeconds(5);     // a pause of the whole program worth a log line
     private static readonly TimeSpan HeadTime = TimeSpan.FromSeconds(15);      // a request's first line and headers
     private static readonly TimeSpan BodyIdle = TimeSpan.FromSeconds(60);      // a body may be slow, not silent
     private const int FinishedKept = 50;
@@ -80,7 +82,8 @@ internal sealed class MeetingWorker : IDisposable
     private readonly Dictionary<string, DateTime> _over = new();                // recordings that ended: a late word is not believed
     private readonly object _openLock = new();
     private readonly ConcurrentDictionary<string, byte> _receiving = new();     // stamps with a file arriving now
-    private System.Threading.Timer? _sweep;
+    private System.Threading.Timer? _sweep, _pulse;
+    private long _pulseAt;
 
     /// <summary>How long a recording counts as running after the sender's last word about it. The sender says it
     /// every minute, so a recording that ended with no word (the sender was closed, the cable was pulled) stops
@@ -136,6 +139,15 @@ internal sealed class MeetingWorker : IDisposable
         _ = Task.Run(WorkLoopAsync);
         var every = TimeSpan.FromMilliseconds(Math.Clamp(OpenLife.TotalMilliseconds / 4, 50, 30_000));
         _sweep = new System.Threading.Timer(_ => UpdateWarm(), null, every, every);
+        // A request that waits unread looks the same from outside whether the network lost it or this program
+        // did not run. This says which: a one-second tick that comes seconds late is the program standing still.
+        _pulseAt = Environment.TickCount64;
+        _pulse = new System.Threading.Timer(_ =>
+        {
+            long now = Environment.TickCount64, gap = now - Interlocked.Exchange(ref _pulseAt, now);
+            if (gap > StoodStill.TotalMilliseconds)
+                HuginnLog.Write($"worker: this program stood still for {gap / 1000.0:F0} s (the computer slept, or gave it no time)");
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
         HuginnLog.Write($"worker: listening on {string.Join(", ", _endpoints)}");
     }
 
@@ -164,7 +176,9 @@ internal sealed class MeetingWorker : IDisposable
             var stream = client.GetStream();
             int status;
             object? body = null;
+            var took = System.Diagnostics.Stopwatch.StartNew();
             var req = await ReadHeadAsync(stream).ConfigureAwait(false);
+            var read = took.Elapsed;
             if (req == null) status = 400;
             else
             {
@@ -182,6 +196,9 @@ internal sealed class MeetingWorker : IDisposable
             send.CancelAfter(HeadTime);
             await stream.WriteAsync(Encoding.ASCII.GetBytes(head), send.Token).ConfigureAwait(false);
             if (json.Length > 0) await stream.WriteAsync(json, send.Token).ConfigureAwait(false);
+            // A file takes as long as it is big; any other answer, or any request's first lines, should take no time.
+            if (req != null && (read > SlowAnswer || (req.Method != "PUT" && took.Elapsed > SlowAnswer)))
+                HuginnLog.Write($"worker: {req.Method} {req.Path} took {took.Elapsed.TotalSeconds:F1} s to answer ({read.TotalSeconds:F1} s of it until the request was read)");
             // A refused request may still have body bytes on their way. Closing with them unread resets the
             // connection and can take the answer with it, so say "no more from me" and read a little first.
             client.Client.Shutdown(SocketShutdown.Send);
@@ -509,6 +526,7 @@ internal sealed class MeetingWorker : IDisposable
     {
         try { _stop.Cancel(); } catch { /* already */ }
         _sweep?.Dispose();
+        _pulse?.Dispose();
         _queue.Writer.TryComplete();
         foreach (var l in _listeners) { try { l.Stop(); } catch { /* already */ } }
     }

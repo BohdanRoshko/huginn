@@ -41,7 +41,12 @@ internal static class WorkerProgram
         if (!isNew) { HuginnLog.Write("worker: another one already runs on this data folder; this one exits"); return 0; }
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) => HuginnLog.Write("worker: CRASH", (Exception)e.ExceptionObject);
-        HuginnLog.Write($"worker: started, data folder {Paths.BaseDir()}, user {Environment.UserName}");
+        var priority = System.Diagnostics.Process.GetCurrentProcess().PriorityClass;
+        HuginnLog.Write($"worker: started, data folder {Paths.BaseDir()}, user {Environment.UserName}, priority {priority}");
+        // A scheduled task starts its program at priority 7 unless told otherwise: below normal for the CPU, and
+        // low for the disk and for memory. An idle program then answers late and a cold model loads slowly.
+        if (priority is System.Diagnostics.ProcessPriorityClass.BelowNormal or System.Diagnostics.ProcessPriorityClass.Idle)
+            HuginnLog.Write("worker: this program was started below normal priority; if a scheduled task starts it, set the task's priority to 4 (see the README)");
 
         var config = ReadConfig();
         if (config == null) return 3;

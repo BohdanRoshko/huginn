@@ -826,8 +826,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             // The transcript and the name: from the other computer when one is set up and it does the job, else made here.
             var done = (_worker == null ? null : await ProcessOnWorkerAsync(cap, jobId, sw, cts.Token)) ?? await ProcessHereAsync(cap, jobId, sw, cts.Token);
             var r = done.Transcript;
-            // A meeting the other computer transcribed says so in the row's last chip; one made here says nothing.
-            string where = done.Far ? " · other computer" : "";
+            // The row does not say which computer transcribed the meeting; the log does, in the line below.
             // The meeting's title, made by this app's naming code (here or on the other computer). It is the only one.
             Recent.SetTitle(jobId, done.Title);
             HuginnLog.Write($"meeting {cap.Stamp}: named \"{done.Title}\" {(done.Far ? "on the other computer" : "here")}");
@@ -845,7 +844,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                                     (odin.Title.Length > 0 && odin.Title != title ? $"; Odin's own title \"{odin.Title}\" is not used" : ""));
                     Recent.SetOdinSlug(jobId, odin.Slug);
                     await UploadShotsAsync(cap.Stamp, odin.Slug, cts.Token);
-                    Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s){where}", JobTone.Good, cancelable: false);
+                    Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s)", JobTone.Good, cancelable: false);
                     Ui(() => _p.Notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {title}"));
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
@@ -855,7 +854,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
                     await SummarizeAsync(jobId, cap.Stamp, r.Text, notes, cts.Token); // Odin wrote none: the local one
                     // The row looks like any saved meeting: it has its local name, and Odin is never named on it
                     // (Bohdan, 2026-11-20). The notice below is the one place the failure shows.
-                    Recent.SetStatus(jobId, "Saved" + where, JobTone.Good, cancelable: false);
+                    Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
                     Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
                     _shell.Warn("Huginn — Odin not reachable", $"Saved the transcript to disk; file it later.\n{Path.GetFileName(r.TranscriptPath)}");
                     _shell.Reveal(Recent.TranscriptPathFor(cap.Stamp) ?? r.TranscriptPath);
@@ -864,7 +863,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             else
             {
                 await SummarizeAsync(jobId, cap.Stamp, r.Text, notes, cts.Token);
-                Recent.SetStatus(jobId, "Saved" + where, JobTone.Good, cancelable: false);
+                Recent.SetStatus(jobId, "Saved", JobTone.Good, cancelable: false);
                 Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
                 _shell.Reveal(Recent.TranscriptPathFor(cap.Stamp) ?? r.TranscriptPath);
             }
@@ -914,7 +913,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     {
         var job = await MeetingJob.RunAsync(cap, _transcriber, _cleaner, options: null, transcribed: async r =>
         {
-            HuginnLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
+            HuginnLog.Write($"meeting {cap.Stamp}: transcribed {r.SegmentCount} segments on this computer in {sw.Elapsed:m\\:ss} -> {Path.GetFileName(r.TranscriptPath)}");
             HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {r.Echo}{(r.RawTranscriptPath == null ? "" : " (raw kept)")}");
             Recent.SetTranscript(jobId, r.TranscriptPath);
             // Without Odin the local model writes the only summary (and the name), so it is fetched once when it is

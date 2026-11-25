@@ -274,8 +274,7 @@ public class StatusChipsTests
     [Fact]
     public void OnlyARowOdinFiledHasATypeChip()
     {
-        Assert.Equal(new[] { new StatusChip("Saved", ChipKind.Other), new StatusChip("other computer", ChipKind.Other) },
-            RecentMeetings.Chips("Saved · other computer", withTasks: true));
+        Assert.Equal(new[] { new StatusChip("Saved", ChipKind.Other) }, RecentMeetings.Chips("Saved", withTasks: true));
         Assert.Equal(new[] { new StatusChip("Failed", ChipKind.Other), new StatusChip("other", ChipKind.Other) },
             RecentMeetings.Chips("Failed · other", withTasks: true)); // a failure's reason is never a type
     }
@@ -285,11 +284,14 @@ public class StatusChipsTests
         Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · Odin offline", withTasks: true));
 
     [Fact]
-    public void OnlyAMeetingAnotherComputerTranscribedSaysWhereItWasMade()
+    public void ARowNeverSaysWhichComputerTranscribedIt()
     {
+        // Rows were saved with one of the two texts for two days; neither shows, old row or new.
         Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · this computer", withTasks: false));
+        Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · other computer", withTasks: false));
         Assert.Equal(new[] { "1 to-do", "internal" }, RecentMeetings.StatusChips("✓ internal-dev · 1 task(s) · this computer", withTasks: true));
-        Assert.Equal(new[] { "Saved", "other computer" }, RecentMeetings.StatusChips("Saved · other computer", withTasks: false));
+        Assert.Equal(new[] { "0 to-do", "internal" }, RecentMeetings.StatusChips("✓ internal-dev · 0 task(s) · other computer", withTasks: true));
+        Assert.Equal(new[] { "other" }, RecentMeetings.StatusChips("✓ other · 0 task(s) · other computer", withTasks: false)); // the type "other" stays
     }
 }
 

@@ -129,9 +129,9 @@ How it goes, with `WorkerUrl` set:
 3. The other computer transcribes both tracks, removes the echo, names the speakers and names the meeting, with the
    same code Huginn runs (`MeetingJob` in the core). It does one meeting at a time; the next one waits.
 4. Huginn takes the transcript, the raw transcript and the name, writes them into its own `Meetings/`, and carries
-   on as always: the recent list, Odin, the snapshots, the audio cleanup. The row's last chip says **other computer**.
+   on as always: the recent list, Odin, the snapshots, the audio cleanup. `huginn.log` says which computer transcribed each meeting; the row does not.
 5. If the other computer cannot be reached for 30 seconds after Stop, fails, or stops answering for a minute
-   mid-job, Huginn transcribes the meeting itself and the row has no such chip. `huginn.log` says why.
+   mid-job, Huginn transcribes the meeting itself. `huginn.log` says why.
    Only then does this computer load the models, so that transcript starts half a minute and one model load later.
    A recording that is thrown away, or cancelled before its job was queued, is told to the other computer as ended.
 

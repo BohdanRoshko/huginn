@@ -133,8 +133,8 @@ internal sealed class RecentMeetings
     /// <summary>A row's status as the recorder panel's chips: "✓ internal-dev · 1 task(s)" → [1 to-do] [internal], the
     /// to-do count first and only when there is an Odin to make them (Bohdan, 2026-11-20; "to-do" and the short type
     /// words 2026-11-25). "Odin offline", from rows saved before 2026-11-20, never shows: "Saved · Odin offline" →
-    /// [Saved]. Neither does "this computer", which rows carried for two days in 2026-11: only a meeting another
-    /// computer transcribed says where ("other computer").</summary>
+    /// [Saved]. Neither does "this computer" or "other computer", which rows carried for two days in 2026-11: a row
+    /// does not say which computer transcribed the meeting (the log does).</summary>
     public static IReadOnlyList<StatusChip> Chips(string status, bool withTasks)
     {
         var chips = new List<StatusChip>();
@@ -148,7 +148,8 @@ internal sealed class RecentMeetings
             var tasks = System.Text.RegularExpressions.Regex.Match(part, @"^(\d+) task\(s\)$");
             if (tasks.Success) { todo = new StatusChip($"{tasks.Groups[1].Value} to-do", ChipKind.ToDo); continue; }
             if (part.Length == 0 || part.Equals("Odin offline", StringComparison.OrdinalIgnoreCase)
-                || part.Equals("this computer", StringComparison.OrdinalIgnoreCase)) continue;
+                || part.Equals("this computer", StringComparison.OrdinalIgnoreCase)
+                || part.Equals("other computer", StringComparison.OrdinalIgnoreCase)) continue;
             if (filed && first)
             {
                 var word = TypeWords.FirstOrDefault(t => t.Odin.Equals(part, StringComparison.OrdinalIgnoreCase)).Shown ?? part;

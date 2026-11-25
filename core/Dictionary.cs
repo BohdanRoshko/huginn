@@ -11,8 +11,7 @@ internal static class Dictionary
 {
     private static readonly string[] Defaults =
     {
-        "Odin", "Huginn", "Mimir",
-        "OAuth", "Bohdan",
+        "Huginn", "OAuth",
     };
 
     private static string FilePath() => Paths.File("dictionary.txt");

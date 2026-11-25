@@ -14,13 +14,13 @@ namespace Huginn;
 /// only ever Idle or Recording — it is NEVER blocked by processing.
 ///
 /// Below that is a PERSISTENT list of the <see cref="DisplayMax"/> most recent recordings (newest first,
-/// survives restarts via <c>recent.json</c>). Each row shows the meeting's NAME (the Odin note title, once
-/// filed; the live status before that), the time it was recorded, and a ✕ to STOP an in-flight recording's
+/// survives restarts via <c>recent.json</c>). Each row shows the meeting's NAME (made by <see cref="MeetingName"/>;
+/// the live status before that), the time it was recorded, and a ✕ to STOP an in-flight recording's
 /// processing (transcribe/file) if it isn't worth keeping. Starting a new meeting pushes a new row on top
 /// and drops the oldest off the list. So you can start the next meeting while a previous one transcribes.
 /// Click the pill = start/stop (<see cref="RecordToggleRequested"/>); click a row's ✕ = cancel
 /// (<see cref="CancelRequested"/>). Double-click a row (or right-click it → Rename) to name the meeting; the
-/// transcript file takes that name (<see cref="MeetingProcessor.RenameTranscript"/>) and Odin's title no longer
+/// transcript file takes that name (<see cref="MeetingProcessor.RenameTranscript"/>) and a title made later no longer
 /// overwrites it. Drag to move; right-click outside the rows to hide.
 ///
 /// It is an ordinary window, not always on top (Bohdan, 2026-11-20): other windows can cover it, and the tray icon
@@ -379,7 +379,7 @@ internal sealed class MeetingPanel : Form, IRecorderView
         int rightPad = odin ? 66 : cancelable || copyable ? 40 : 16;
         int nameW = Width - 34 - rightPad;
 
-        // Line 1 = the meeting NAME (Odin note title) once known; the live status before that.
+        // Line 1 = the meeting NAME once known; the live status before that.
         string name = entry.Title ?? entry.Status;
         Color nameCol = entry.Title != null ? TitleCol : RowName;
         TextRenderer.DrawText(g, name, _rowNameFont, new Rectangle(34, top + 4, nameW, 16), nameCol,

@@ -16,7 +16,7 @@ internal sealed class RecentMeeting
     public int Id { get; init; }
     public string Stamp { get; init; } = "";
     public DateTime Started { get; init; }
-    /// <summary>The Odin note name once filed, or the user's own name.</summary>
+    /// <summary>The meeting's title: made by <see cref="MeetingName"/>, or the user's own. Never Odin's.</summary>
     public string? Title { get; set; }
     public string Status { get; set; } = "Transcribing…";
     public JobTone Tone { get; set; } = JobTone.Busy;
@@ -24,7 +24,7 @@ internal sealed class RecentMeeting
     public bool Cancelable { get; set; } = true;
     /// <summary>The transcript file once written (null while transcribing). It moves on rename.</summary>
     public string? Transcript { get; set; }
-    /// <summary>The user named it; Odin's title must not overwrite that.</summary>
+    /// <summary>The user named it; a title made later must not overwrite that.</summary>
     public bool Renamed { get; set; }
     /// <summary>The Odin note this meeting was filed as (its slug), once filed. Only Bohdan has Odin.</summary>
     public string? OdinSlug { get; set; }
@@ -92,7 +92,7 @@ internal sealed class RecentMeetings
     public void SetStatus(int id, string status, JobTone tone, bool cancelable) =>
         Update(id, j => { j.Status = status; j.Tone = tone; j.Cancelable = cancelable; });
 
-    /// <summary>Names the row with the Odin note title. A name the user typed wins.</summary>
+    /// <summary>Names the row. A name the user typed wins.</summary>
     public void SetTitle(int id, string? title) => Update(id, j =>
     {
         if (j.Renamed || string.IsNullOrWhiteSpace(title)) return;

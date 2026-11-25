@@ -31,7 +31,6 @@ internal sealed record MeetingView(
                 var (front, body) = SplitFrontmatter(note);
                 summary = body.Trim().Length > 0 ? body : null;
                 ev = Field(front, "event");
-                title = Field(front, "description") ?? title;
                 attendees = List(front, "attendees");
             }
             catch (Exception ex) { HuginnLog.Write($"meeting window: Odin's note {odinSlug} not read", ex); }

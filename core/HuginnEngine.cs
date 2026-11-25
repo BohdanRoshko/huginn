@@ -828,7 +828,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             var r = done.Transcript;
             // A meeting the other computer transcribed says so in the row's last chip; one made here says nothing.
             string where = done.Far ? " · other computer" : "";
-            // A name made by the local model, so the row is named even when Odin is off or files nothing; Odin's title replaces it.
+            // The meeting's title, made by this app's naming code (here or on the other computer). It is the only one.
             Recent.SetTitle(jobId, done.Title);
             HuginnLog.Write($"meeting {cap.Stamp}: named \"{done.Title}\" {(done.Far ? "on the other computer" : "here")}");
             Ui(() => _p.Notes.SetTranscriptReady(cap.Stamp));
@@ -838,13 +838,15 @@ internal sealed class HuginnEngine : IAsyncDisposable
                 Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "Filing to Odin…"));
                 try
                 {
-                    var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), notes, cts.Token);
-                    HuginnLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) \"{odin.Title}\"");
-                    if (!string.IsNullOrWhiteSpace(odin.Title)) Recent.SetTitle(jobId, odin.Title);
+                    // The title goes TO Odin and never comes back: this app is the one place that names a meeting.
+                    string title = Recent.Find(jobId)?.Title ?? done.Title;
+                    var odin = await OdinClient.ProcessMeetingAsync(r.Text, cap.StartedLocal.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), notes, title, cts.Token);
+                    HuginnLog.Write($"meeting {cap.Stamp}: filed to Odin ({odin.Classification}, {odin.TaskCount} task(s)) as \"{title}\"" +
+                                    (odin.Title.Length > 0 && odin.Title != title ? $"; Odin's own title \"{odin.Title}\" is not used" : ""));
                     Recent.SetOdinSlug(jobId, odin.Slug);
                     await UploadShotsAsync(cap.Stamp, odin.Slug, cts.Token);
                     Recent.SetStatus(jobId, $"✓ {odin.Classification} · {odin.TaskCount} task(s){where}", JobTone.Good, cancelable: false);
-                    Ui(() => _p.Notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {odin.Title}"));
+                    Ui(() => _p.Notes.SetJobStatus(cap.Stamp, $"✓ Filed to Odin · {title}"));
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested) { throw; }
                 catch (Exception ex)

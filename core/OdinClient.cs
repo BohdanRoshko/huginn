@@ -19,10 +19,12 @@ internal static class OdinClient
 
     /// <param name="notes">The lines typed in the panel while it recorded (<see cref="MeetingNotes"/>), or null.
     /// Odin treats every line as a must-include and expands it from the transcript around its stamp.</param>
-    public static async Task<OdinMeetingResult> ProcessMeetingAsync(string transcript, string? date, string? notes, CancellationToken ct = default)
+    /// <param name="title">The meeting's title, made here (<see cref="MeetingName"/>) or typed by the user. Odin files
+    /// the note under it; the title Odin answers with is never taken back.</param>
+    public static async Task<OdinMeetingResult> ProcessMeetingAsync(string transcript, string? date, string? notes, string? title, CancellationToken ct = default)
     {
         using var resp = await Http.PostAsJsonAsync(
-            $"{Config.OdinBaseUrl}/api/meetings/process", new { transcript, date, notes }, ct);
+            $"{Config.OdinBaseUrl}/api/meetings/process", new { transcript, date, notes, title }, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
             throw new InvalidOperationException($"Odin {(int)resp.StatusCode}: {Trunc(body)}");

@@ -247,6 +247,14 @@ public class StatusChipsTests
     [Fact]
     public void OdinOfflineNeverShows() =>
         Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · Odin offline", withTasks: true));
+
+    [Fact]
+    public void OnlyAMeetingAnotherComputerTranscribedSaysWhereItWasMade()
+    {
+        Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · this computer", withTasks: false));
+        Assert.Equal(new[] { "1 task", "internal-dev" }, RecentMeetings.StatusChips("✓ internal-dev · 1 task(s) · this computer", withTasks: true));
+        Assert.Equal(new[] { "Saved", "other computer" }, RecentMeetings.StatusChips("Saved · other computer", withTasks: false));
+    }
 }
 
 /// <summary>The local meeting summary: the model's tagged lines into markdown, without the model.</summary>

@@ -812,8 +812,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
             // The transcript and the name: from the other computer when one is set up and it does the job, else made here.
             var done = (_worker == null ? null : await ProcessOnWorkerAsync(cap, jobId, sw, cts.Token)) ?? await ProcessHereAsync(cap, jobId, sw, cts.Token);
             var r = done.Transcript;
-            // With another computer set up, the row's last chip says which of the two did the work.
-            string where = _worker == null ? "" : done.Far ? " · other computer" : " · this computer";
+            // A meeting the other computer transcribed says so in the row's last chip; one made here says nothing.
+            string where = done.Far ? " · other computer" : "";
             // A name made by the local model, so the row is named even when Odin is off or files nothing; Odin's title replaces it.
             Recent.SetTitle(jobId, done.Title);
             HuginnLog.Write($"meeting {cap.Stamp}: named \"{done.Title}\" {(done.Far ? "on the other computer" : "here")}");

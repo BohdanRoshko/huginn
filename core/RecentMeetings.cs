@@ -105,7 +105,8 @@ internal sealed class RecentMeetings
 
     /// <summary>A row's status as the recorder panel's chips: "✓ internal-dev · 1 task(s)" → [1 task] [internal-dev], the
     /// task count first and only when there is an Odin to make tasks (Bohdan, 2026-11-20). "Odin offline", from rows
-    /// saved before 2026-11-20, never shows: "Saved · Odin offline" → [Saved].</summary>
+    /// saved before 2026-11-20, never shows: "Saved · Odin offline" → [Saved]. Neither does "this computer", which rows
+    /// carried for two days in 2026-11: only a meeting another computer transcribed says where ("other computer").</summary>
     public static IEnumerable<string> StatusChips(string status, bool withTasks)
     {
         var parts = new List<string>();
@@ -115,7 +116,8 @@ internal sealed class RecentMeetings
             var part = raw.TrimStart('✓', ' ');
             var tasks = System.Text.RegularExpressions.Regex.Match(part, @"^(\d+) task\(s\)$");
             if (tasks.Success) { taskChip = tasks.Groups[1].Value == "1" ? "1 task" : $"{tasks.Groups[1].Value} tasks"; continue; }
-            if (part.Length > 0 && !part.Equals("Odin offline", StringComparison.OrdinalIgnoreCase)) parts.Add(part);
+            if (part.Length > 0 && !part.Equals("Odin offline", StringComparison.OrdinalIgnoreCase)
+                && !part.Equals("this computer", StringComparison.OrdinalIgnoreCase)) parts.Add(part);
         }
         if (taskChip != null && withTasks) parts.Insert(0, taskChip);
         return parts;

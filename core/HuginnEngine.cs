@@ -949,7 +949,10 @@ internal sealed class HuginnEngine : IAsyncDisposable
             HuginnLog.Write($"meeting {cap.Stamp}: transcribed {far.Lines} segments on the other computer, {TimeSpan.FromSeconds(far.Seconds):m\\:ss} there, {sw.Elapsed:m\\:ss} with the sending -> {Path.GetFileName(path)}");
             HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {far.Echo}{(rawPath == null ? "" : " (raw kept)")}");
             Recent.SetTranscript(jobId, path);
-            return new Processed(new MeetingResultFiles(path, far.Text), far.Title, Far: true);
+            // The name came from the same naming code on the other computer; the rule is applied here again, so a
+            // title from an older build there is held to it too.
+            var title = MeetingName.TopicOnly(far.Title);
+            return new Processed(new MeetingResultFiles(path, far.Text), title.Length > 0 ? title : MeetingName.Place(far.Text), Far: true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

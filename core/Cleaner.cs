@@ -159,9 +159,11 @@ internal sealed class Cleaner : IAsyncDisposable
     }
 
     private const string TitlePrompt =
-        "You name meetings. Given a meeting transcript, reply with a short title of 3 to 7 words that says what " +
-        "the meeting was about, like a calendar event name. Use the words the people used. No quotes, no names of " +
-        "people unless the meeting was about them, no full stop. Output ONLY the title.";
+        "You name meetings. Given a meeting transcript, reply with a title of 4 or 5 words that names the TOPIC " +
+        "the people talked about. Use the words the people used. Never say what kind of meeting it was: no " +
+        "\"standup\", \"sync\", \"daily\", \"weekly\", \"check-in\", \"1:1\", \"call\", \"meeting\" or \"review\", and no " +
+        "\"Kind: topic\" form. No quotes, no names of people unless the meeting was about them, no full stop. " +
+        "Output ONLY the title.";
 
     /// <summary>A short title for a meeting transcript (<see cref="MeetingName"/>). Empty when the model is not ready.</summary>
     public async Task<string> TitleAsync(string speech)

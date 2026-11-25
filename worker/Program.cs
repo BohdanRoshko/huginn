@@ -47,6 +47,9 @@ internal static class WorkerProgram
         // low for the disk and for memory. An idle program then answers late and a cold model loads slowly.
         if (priority is System.Diagnostics.ProcessPriorityClass.BelowNormal or System.Diagnostics.ProcessPriorityClass.Idle)
             HuginnLog.Write("worker: this program was started below normal priority; if a scheduled task starts it, set the task's priority to 4 (see the README)");
+        // Said at start, not at the first meeting: the program would listen and answer, and then load no model.
+        if (NativeRuntime.Missing() is { Count: > 0 } missing)
+            HuginnLog.Write($"worker: this Windows lacks {string.Join(", ", missing)}; no speech model will load until you {NativeRuntime.Fix}");
 
         var config = ReadConfig();
         if (config == null) return 3;
@@ -97,7 +100,12 @@ internal static class WorkerProgram
                     await transcriber.EnsureLoadedAsync();
                     if (!was) HuginnLog.Write($"worker: the Whisper models loaded in {sw.Elapsed.TotalSeconds:F1} s ({WhisperRuntime()})");
                 }
-                catch (Exception ex) { HuginnLog.Write("worker: the Whisper models did not load", ex); }
+                catch (Exception ex)
+                {
+                    HuginnLog.Write("worker: the Whisper models did not load", ex);
+                    if (NativeRuntime.IsLoadFailure(ex))
+                        HuginnLog.Write($"worker: the speech library itself would not load. On a fresh Windows the usual cause is a missing Visual C++ runtime: {NativeRuntime.Fix}, then start the worker again");
+                }
             });
         }
 

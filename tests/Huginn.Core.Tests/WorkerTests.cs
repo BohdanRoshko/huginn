@@ -393,6 +393,23 @@ public class WorkerTests
     }
 
     [Fact]
+    public void AMissingNativeRuntimeIsNamed()
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.Equal(new[] { "no-such-runtime-140.dll" }, NativeRuntime.Missing(new[] { "kernel32.dll", "no-such-runtime-140.dll" }));
+        else
+            Assert.Empty(NativeRuntime.Missing());
+
+        // The error as the speech library gives it, wrapped the way a failed load arrives.
+        var asSeen = new InvalidOperationException("the models did not load",
+            new Exception("Failed to load native whisper library. Error: Cannot load the library on this platform using NativeLibrary"));
+        Assert.True(NativeRuntime.IsLoadFailure(asSeen));
+        Assert.True(NativeRuntime.IsLoadFailure(new TypeInitializationException("X", new DllNotFoundException("whisper"))));
+        Assert.False(NativeRuntime.IsLoadFailure(new FileNotFoundException("the model file is not there")));
+        Assert.False(NativeRuntime.IsLoadFailure(null));
+    }
+
+    [Fact]
     public void AWorkerNeedsASecretAndOneAddress()
     {
         MeetingWorker.Processor none = (_, _, _) => throw new InvalidOperationException();

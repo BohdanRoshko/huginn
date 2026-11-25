@@ -144,7 +144,7 @@ Dictation never leaves the computer you speak into.
 "WorkerKey": "the same secret as in worker.json"
 ```
 
-**On the other computer** (Windows x64; it needs a GPU driver with Vulkan, and nothing else installed):
+**On the other computer** (Windows x64; it needs a GPU driver with Vulkan and the Visual C++ runtime, see step 3):
 
 1. Build the program on any computer with the .NET 10 SDK. It carries its own .NET:
    ```powershell
@@ -161,10 +161,14 @@ Dictation never leaves the computer you speak into.
    ```
    `Listen` holds addresses of that computer. The program opens the port on those addresses and on no other;
    `0.0.0.0` is refused. Every request must carry the key, or it is answered 401.
-3. Run it: `D:\HuginnWorker\app\Huginn.Worker.exe --data D:\HuginnWorker\data` (or set `HUGINN_DATA_DIR`). The data folder
+3. Install the "Microsoft Visual C++ 2015-2022 Redistributable (x64)" (https://aka.ms/vs/17/release/vc_redist.x64.exe)
+   if the computer does not have it. A fresh Windows does not. Without it the program starts, listens and answers,
+   but no model loads: the log says `Failed to load native whisper library`. The program's first log lines name the
+   missing libraries.
+4. Run it: `D:\HuginnWorker\app\Huginn.Worker.exe --data D:\HuginnWorker\data` (or set `HUGINN_DATA_DIR`). The data folder
    is required. On its first start it downloads the Whisper model (1.6 GB) and the text model that names meetings
    (2 GB) into the data folder; copying them from a Huginn data folder saves the download.
-4. To start it when the computer boots, with nobody signed in, register a task that runs as SYSTEM (an elevated
+5. To start it when the computer boots, with nobody signed in, register a task that runs as SYSTEM (an elevated
    PowerShell). A task, not a service: a task runs the program as it is, a service would need service code in it.
    ```powershell
    $run = New-ScheduledTaskAction -Execute 'D:\HuginnWorker\app\Huginn.Worker.exe' -Argument '--data D:\HuginnWorker\data'
@@ -175,7 +179,7 @@ Dictation never leaves the computer you speak into.
    low priority for the disk and for memory. Any busy program beside it then starves it: it answers half a minute
    late and takes minutes to load a model. The program's first log line says the priority it got.
    If the network comes up after the program, it tries the addresses again every 15 seconds.
-5. Let the recording computer in through the firewall, and nobody else:
+6. Let the recording computer in through the firewall, and nobody else:
    ```powershell
    New-NetFirewallRule -DisplayName 'Huginn Worker' -Direction Inbound -Protocol TCP -LocalPort 47822 -RemoteAddress 192.168.1.10 -Action Allow
    ```

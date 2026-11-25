@@ -4,6 +4,12 @@ namespace Huginn;
 
 internal enum JobTone { Busy, Good, Warn, Bad, Muted }
 
+/// <summary>What a chip on a meeting's row says: how many to-dos Odin made, the type Odin gave the meeting, or anything else.</summary>
+internal enum ChipKind { Other, ToDo, Type }
+
+/// <summary>One chip of a meeting's row, as both recorder panels draw it.</summary>
+internal readonly record struct StatusChip(string Text, ChipKind Kind);
+
 /// <summary>One row of the recorder's recent list.</summary>
 internal sealed class RecentMeeting
 {
@@ -113,25 +119,59 @@ internal sealed class RecentMeetings
     /// <summary>The row's transcript path, or where it will be written.</summary>
     public static string ResolveTranscript(RecentMeeting e) => e.Transcript ?? MeetingProcessor.TranscriptPathFor(e.Stamp, null);
 
-    /// <summary>A row's status as the recorder panel's chips: "✓ internal-dev · 1 task(s)" → [1 task] [internal-dev], the
-    /// task count first and only when there is an Odin to make tasks (Bohdan, 2026-11-20). "Odin offline", from rows
-    /// saved before 2026-11-20, never shows: "Saved · Odin offline" → [Saved]. Neither does "this computer", which rows
-    /// carried for two days in 2026-11: only a meeting another computer transcribed says where ("other computer").</summary>
-    public static IEnumerable<string> StatusChips(string status, bool withTasks)
+    /// <summary>The meeting types Odin gives, and the one short word each shows as on a chip. This is the one place
+    /// the wording lives: Odin's stored values are not renamed, and a row saved long ago shows the new word too.
+    /// A type that is not listed shows as Odin wrote it.</summary>
+    internal static readonly (string Odin, string Shown)[] TypeWords =
     {
-        var parts = new List<string>();
-        string? taskChip = null;
+        ("client", "client"),
+        ("internal-dev", "internal"),
+        ("partnership", "partner"),
+        ("other", "other"),
+    };
+
+    /// <summary>A row's status as the recorder panel's chips: "✓ internal-dev · 1 task(s)" → [1 to-do] [internal], the
+    /// to-do count first and only when there is an Odin to make them (Bohdan, 2026-11-20; "to-do" and the short type
+    /// words 2026-11-25). "Odin offline", from rows saved before 2026-11-20, never shows: "Saved · Odin offline" →
+    /// [Saved]. Neither does "this computer", which rows carried for two days in 2026-11: only a meeting another
+    /// computer transcribed says where ("other computer").</summary>
+    public static IReadOnlyList<StatusChip> Chips(string status, bool withTasks)
+    {
+        var chips = new List<StatusChip>();
+        StatusChip? todo = null;
+        bool filed = status.TrimStart().StartsWith('✓'); // a row Odin filed: its first word is the meeting's type
+        int at = 0;
         foreach (var raw in status.Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
+            bool first = at++ == 0;
             var part = raw.TrimStart('✓', ' ');
             var tasks = System.Text.RegularExpressions.Regex.Match(part, @"^(\d+) task\(s\)$");
-            if (tasks.Success) { taskChip = tasks.Groups[1].Value == "1" ? "1 task" : $"{tasks.Groups[1].Value} tasks"; continue; }
-            if (part.Length > 0 && !part.Equals("Odin offline", StringComparison.OrdinalIgnoreCase)
-                && !part.Equals("this computer", StringComparison.OrdinalIgnoreCase)) parts.Add(part);
+            if (tasks.Success) { todo = new StatusChip($"{tasks.Groups[1].Value} to-do", ChipKind.ToDo); continue; }
+            if (part.Length == 0 || part.Equals("Odin offline", StringComparison.OrdinalIgnoreCase)
+                || part.Equals("this computer", StringComparison.OrdinalIgnoreCase)) continue;
+            if (filed && first)
+            {
+                var word = TypeWords.FirstOrDefault(t => t.Odin.Equals(part, StringComparison.OrdinalIgnoreCase)).Shown ?? part;
+                chips.Add(new StatusChip(word, ChipKind.Type));
+            }
+            else chips.Add(new StatusChip(part, ChipKind.Other));
         }
-        if (taskChip != null && withTasks) parts.Insert(0, taskChip);
-        return parts;
+        if (todo != null && withTasks) chips.Insert(0, todo.Value);
+        return chips;
     }
+
+    /// <summary>The chips as plain words, for a place that writes them in a line (the Mac menu's Recent list).</summary>
+    public static IEnumerable<string> StatusChips(string status, bool withTasks) => Chips(status, withTasks).Select(c => c.Text);
+
+    /// <summary>The texts a chip must be wide enough for. The to-do count and the meeting type each keep ONE width in
+    /// every row, so the chips line up whatever a row holds: the to-do chip fits a two-digit count, the type chip
+    /// fits the longest type word. Any other chip is as wide as its own text.</summary>
+    public static IReadOnlyList<string> WidthSamples(StatusChip chip) => chip.Kind switch
+    {
+        ChipKind.ToDo => new[] { "00 to-do", "88 to-do", chip.Text },
+        ChipKind.Type => TypeWords.Select(t => t.Shown).Append(chip.Text).ToArray(),
+        _ => new[] { chip.Text },
+    };
 
     /// <summary>The CURRENT transcript of a recording (it moves on rename), or null when none exists yet.</summary>
     public string? TranscriptPathFor(string stamp)

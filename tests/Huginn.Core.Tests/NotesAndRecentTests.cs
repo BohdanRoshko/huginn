@@ -240,8 +240,44 @@ public class StatusChipsTests
     [Fact]
     public void TaskCountComesFirstAndOnlyWithOdin()
     {
-        Assert.Equal(new[] { "3 tasks", "internal-dev" }, RecentMeetings.StatusChips("✓ internal-dev · 3 task(s)", withTasks: true));
-        Assert.Equal(new[] { "internal-dev" }, RecentMeetings.StatusChips("✓ internal-dev · 1 task(s)", withTasks: false));
+        Assert.Equal(new[] { "3 to-do", "internal" }, RecentMeetings.StatusChips("✓ internal-dev · 3 task(s)", withTasks: true));
+        Assert.Equal(new[] { "internal" }, RecentMeetings.StatusChips("✓ internal-dev · 1 task(s)", withTasks: false));
+    }
+
+    [Fact]
+    public void TheCountReadsToDoWithNoPluralAndKeepsOneWidth()
+    {
+        foreach (var n in new[] { 0, 1, 2, 12, 99 })
+        {
+            var chip = RecentMeetings.Chips($"✓ other · {n} task(s)", withTasks: true)[0];
+            Assert.Equal(new StatusChip($"{n} to-do", ChipKind.ToDo), chip);
+            // Every count is measured against the same two-digit texts, so the chip is as wide for 0 as for 99.
+            Assert.Equal(new[] { "00 to-do", "88 to-do" }, RecentMeetings.WidthSamples(chip).Take(2));
+        }
+    }
+
+    [Theory]
+    [InlineData("client", "client")]
+    [InlineData("internal-dev", "internal")]
+    [InlineData("partnership", "partner")]
+    [InlineData("other", "other")]
+    [InlineData("a-type-of-tomorrow", "a-type-of-tomorrow")] // not listed: shown as Odin wrote it
+    public void EachMeetingTypeShowsAsOneShortWordInOneWidth(string odin, string shown)
+    {
+        var chip = RecentMeetings.Chips($"✓ {odin} · 2 task(s) · other computer", withTasks: true)[1];
+        Assert.Equal(new StatusChip(shown, ChipKind.Type), chip);
+        // Measured against every type word, so "other" gets the width of "internal".
+        Assert.Equal(new[] { "client", "internal", "partner", "other" }, RecentMeetings.WidthSamples(chip).Take(4));
+        Assert.All(RecentMeetings.TypeWords, t => Assert.DoesNotContain(' ', t.Shown));
+    }
+
+    [Fact]
+    public void OnlyARowOdinFiledHasATypeChip()
+    {
+        Assert.Equal(new[] { new StatusChip("Saved", ChipKind.Other), new StatusChip("other computer", ChipKind.Other) },
+            RecentMeetings.Chips("Saved · other computer", withTasks: true));
+        Assert.Equal(new[] { new StatusChip("Failed", ChipKind.Other), new StatusChip("other", ChipKind.Other) },
+            RecentMeetings.Chips("Failed · other", withTasks: true)); // a failure's reason is never a type
     }
 
     [Fact]
@@ -252,7 +288,7 @@ public class StatusChipsTests
     public void OnlyAMeetingAnotherComputerTranscribedSaysWhereItWasMade()
     {
         Assert.Equal(new[] { "Saved" }, RecentMeetings.StatusChips("Saved · this computer", withTasks: false));
-        Assert.Equal(new[] { "1 task", "internal-dev" }, RecentMeetings.StatusChips("✓ internal-dev · 1 task(s) · this computer", withTasks: true));
+        Assert.Equal(new[] { "1 to-do", "internal" }, RecentMeetings.StatusChips("✓ internal-dev · 1 task(s) · this computer", withTasks: true));
         Assert.Equal(new[] { "Saved", "other computer" }, RecentMeetings.StatusChips("Saved · other computer", withTasks: false));
     }
 }

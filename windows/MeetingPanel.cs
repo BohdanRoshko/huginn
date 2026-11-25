@@ -392,14 +392,18 @@ internal sealed class MeetingPanel : Form, IRecorderView
         if (entry.Title != null)
         {
             int x = 34 + TextRenderer.MeasureText(g, time, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width + 8;
-            foreach (var chip in RecentMeetings.StatusChips(entry.Status, ShowOdin))
+            foreach (var chip in RecentMeetings.Chips(entry.Status, ShowOdin))
             {
-                int w = TextRenderer.MeasureText(g, chip, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width + 12;
+                // The to-do count and the meeting type keep one width each in every row, so the chips line up.
+                int w = 0;
+                foreach (var sample in RecentMeetings.WidthSamples(chip))
+                    w = Math.Max(w, TextRenderer.MeasureText(g, sample, _rowMetaFont, Size.Empty, TextFormatFlags.NoPadding).Width);
+                w += 12;
                 if (x + w > 34 + nameW) break;
                 var r = new Rectangle(x, top + 20, w, 15);
                 using (var cp = Rounded(r, 4))
                 using (var cb = new SolidBrush(ChipBg)) g.FillPath(cb, cp);
-                TextRenderer.DrawText(g, chip, _rowMetaFont, r, ChipText,
+                TextRenderer.DrawText(g, chip.Text, _rowMetaFont, r, ChipText,
                     TextFormatFlags.NoPrefix | TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
                 x += w + 4;
             }

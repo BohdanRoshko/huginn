@@ -353,13 +353,17 @@ internal sealed class MacRecorderPanel : IRecorderView
         if (entry.Title != null)
         {
             double x = 34 + TextWidth(time, RowMetaFont) + 8;
-            foreach (var chip in RecentMeetings.StatusChips(entry.Status, ShowOdin))
+            foreach (var chip in RecentMeetings.Chips(entry.Status, ShowOdin))
             {
-                double w = Math.Ceiling(TextWidth(chip, RowMetaFont)) + 12;
+                // The to-do count and the meeting type keep one width each in every row, so the chips line up.
+                double w = 0;
+                foreach (var sample in RecentMeetings.WidthSamples(chip))
+                    w = Math.Max(w, Math.Ceiling(TextWidth(sample, RowMetaFont)));
+                w += 12;
                 if (x + w > 34 + nameW) break;
                 var r = R(x, top + 20, w, 15);
                 FillRounded(r, 4, ChipBg);
-                DrawText(chip, RowMetaFont, ChipText, r, NSLineBreakMode.Clipping, NSTextAlignment.Center);
+                DrawText(chip.Text, RowMetaFont, ChipText, r, NSLineBreakMode.Clipping, NSTextAlignment.Center);
                 x += w + 4;
             }
         }

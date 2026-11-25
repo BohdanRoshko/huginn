@@ -43,6 +43,17 @@ internal static class Program
             Application.Run(notes);
             return;
         }
+        // `Huginn.exe --preview-panel`: only the recorder panel with the data folder's recent list, as a user with
+        // Odin sees it (both chips), for checking its look; the running Huginn is untouched.
+        if (args.Contains("--preview-panel"))
+        {
+            ApplicationConfiguration.Initialize();
+            var panel = new MeetingPanel(new RecentMeetings()) { ShowOdin = true };
+            panel.FormClosed += (_, _) => Application.Exit();
+            panel.ShowPanel();
+            Application.Run(panel);
+            return;
+        }
         // `Huginn.exe --preview-meeting <stamp> [<stamp> …]`: only the meeting window with those recordings as tabs,
         // for checking its look; the running Huginn is untouched.
         int at = Array.IndexOf(args, "--preview-meeting");

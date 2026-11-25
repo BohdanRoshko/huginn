@@ -257,6 +257,93 @@ public class StatusChipsTests
     }
 }
 
+/// <summary>A recording the user did not want leaves nothing; one that failed, or already has its transcript, stays.</summary>
+public class CancelledMeetingTests
+{
+    private static string[] Files(string stamp) => Directory.GetFiles(Paths.MeetingsDir(), stamp + "_*").Select(Path.GetFileName).OrderBy(x => x).ToArray()!;
+
+    private static void Recording(string stamp, params string[] names)
+    {
+        Directory.CreateDirectory(Paths.MeetingsDir());
+        foreach (var n in names) File.WriteAllText(Path.Combine(Paths.MeetingsDir(), $"{stamp}_{n}"), "x");
+    }
+
+    [Fact]
+    public void ACancelBeforeTheTranscriptRemovesTheRowAndEveryFile()
+    {
+        const string stamp = "2031-01-05_090000", other = "2031-01-05_090001";
+        Recording(stamp, "me.wav", "them.wav", "notes.md", "speakers.json", "source.txt", "shot-001.jpg");
+        Recording(other, "me.wav", "transcript.txt");
+        var file = Path.Combine(TestData.NewDir(), "recent.json");
+        var r = new RecentMeetings(file);
+        int kept = r.Add(other, DateTime.Now);
+        int id = r.Add(stamp, DateTime.Now);
+
+        Assert.True(MeetingFiles.Cancel(r, id, stamp));
+
+        Assert.Empty(Files(stamp));
+        Assert.Equal(new[] { other }, r.Entries.Select(e => e.Stamp));
+        Assert.Equal(2, Files(other).Length); // a neighbour one second apart is not touched
+        r.FlushNow();
+        Assert.Equal(new[] { other }, new RecentMeetings(file).Entries.Select(e => e.Stamp)); // gone after a restart too
+        _ = kept;
+    }
+
+    [Fact]
+    public void ACancelAfterTheTranscriptKeepsTheMeetingAsSaved()
+    {
+        // The cancel button during the naming or the filing: the transcript is already on disk.
+        const string stamp = "2031-01-06_090000";
+        Recording(stamp, "me.wav", "them.wav", "transcript.txt");
+        var r = new RecentMeetings(Path.Combine(TestData.NewDir(), "recent.json"));
+        int id = r.Add(stamp, DateTime.Now);
+
+        Assert.False(MeetingFiles.Cancel(r, id, stamp));
+
+        Assert.Equal(3, Files(stamp).Length);
+        var row = Assert.Single(r.Entries);
+        Assert.Equal("Saved", row.Status);
+        Assert.False(row.Cancelable);
+    }
+
+    [Fact]
+    public void RowsCancelledEarlierGoAtStartAndFailedOnesStay()
+    {
+        const string cancelled = "2031-01-07_090000", failed = "2031-01-07_100000", interrupted = "2031-01-07_110000", stoppedLate = "2031-01-07_120000";
+        Recording(cancelled, "me.wav", "them.wav", "speakers.json");
+        Recording(failed, "me.wav", "them.wav");
+        Recording(interrupted, "me.wav", "them.wav");
+        Recording(stoppedLate, "me.wav", "transcript.txt");
+        var r = new RecentMeetings(Path.Combine(TestData.NewDir(), "recent.json"));
+        r.SetStatus(r.Add(cancelled, DateTime.Now), "Cancelled", JobTone.Muted, cancelable: false);
+        r.SetStatus(r.Add(failed, DateTime.Now), "Failed · the model file is damaged", JobTone.Bad, cancelable: false);
+        r.SetStatus(r.Add(interrupted, DateTime.Now), "Interrupted", JobTone.Muted, cancelable: false);
+        r.SetStatus(r.Add(stoppedLate, DateTime.Now), "Cancelled", JobTone.Muted, cancelable: false);
+
+        Assert.Equal(new[] { cancelled }, MeetingFiles.ForgetCancelled(r));
+
+        Assert.Empty(Files(cancelled));
+        Assert.Equal(2, Files(failed).Length);
+        Assert.Equal(2, Files(interrupted).Length);
+        Assert.Equal(2, Files(stoppedLate).Length);
+        Assert.Equal(new[] { "Saved", "Interrupted", "Failed · the model file is damaged" }, r.Entries.Select(e => e.Status));
+    }
+
+    [Fact]
+    public void OnlyARecordingsOwnStampDeletesAnything()
+    {
+        const string stamp = "2031-01-08_090000";
+        Recording(stamp, "me.wav");
+        File.WriteAllText(Path.Combine(Paths.MeetingsDir(), "_stray.txt"), "x");
+        Assert.Equal((0, 0), MeetingFiles.DeleteAll(""));
+        Assert.Equal((0, 0), MeetingFiles.DeleteAll("2031-01-08"));
+        Assert.Equal((0, 0), MeetingFiles.DeleteAll("*"));
+        Assert.Single(Files(stamp));
+        Assert.True(File.Exists(Path.Combine(Paths.MeetingsDir(), "_stray.txt")));
+        Assert.Equal((1, 0), MeetingFiles.DeleteAll(stamp));
+    }
+}
+
 /// <summary>The local meeting summary: the model's tagged lines into markdown, without the model.</summary>
 public class MeetingSummaryTests
 {

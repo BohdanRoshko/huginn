@@ -73,6 +73,16 @@ internal sealed class RecentMeetings
         return id;
     }
 
+    /// <summary>Takes a row off the list: a recording that was cancelled leaves none.</summary>
+    public void Remove(int id)
+    {
+        lock (_lock)
+        {
+            if (_entries.RemoveAll(x => x.Id == id) == 0) return;
+        }
+        SaveAndNotify();
+    }
+
     public void SetStatus(int id, string status, JobTone tone, bool cancelable) =>
         Update(id, j => { j.Status = status; j.Tone = tone; j.Cancelable = cancelable; });
 

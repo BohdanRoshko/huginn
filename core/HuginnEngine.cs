@@ -156,6 +156,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
         if (_worker != null) HuginnLog.Write($"worker: meetings are sent to the other computer at {HuginnSettings.Current.WorkerUrl.Trim()}");
         StartQuitWatcher();
         _meet.Start();
+        foreach (var stamp in MeetingFiles.ForgetCancelled(Recent))
+            HuginnLog.Write($"meeting {stamp}: it was cancelled earlier; its row and its files are removed");
         _ = NameUnnamedAsync();
         if (_p.Kumo.IsInstalled)
         {
@@ -676,9 +678,21 @@ internal sealed class HuginnEngine : IAsyncDisposable
         SetStatus("Recording discarded"); // no notification: the user just asked for it
     }
 
+    // A file that was still open when its recording was cancelled is deleted a moment later.
+    private static async Task SweepLaterAsync(string stamp)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            if (MeetingFiles.DeleteAll(stamp).Left == 0) return;
+        }
+        HuginnLog.Write($"meeting {stamp}: some files of the cancelled recording could not be deleted");
+    }
+
     private static void DeleteCapture(MeetingCapture? cap)
     {
         if (cap == null) return;
+        MeetingFiles.DeleteAll(cap.Stamp); // whatever else carries its stamp
         foreach (var path in new[] { cap.MicPath, cap.LoopPath, cap.NotesPath, SpeakerTimeline.PathFor(cap.Stamp), MeetingProcessor.SourcePathFor(cap.Stamp) }.Concat(SpeakerTimeline.ShotFiles(cap.Stamp)))
         {
             try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
@@ -766,8 +780,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
         _shell.OpenOdinNote(slug);
     }
 
-    /// <summary>The cancel button on an in-flight row: stop that job's transcription and Odin filing. The WAVs
-    /// stay on disk; nothing is deleted.</summary>
+    /// <summary>The cancel button on an in-flight row: stop that job. Before its transcript is written the row and
+    /// every file of the recording go (<see cref="MeetingFiles.Cancel"/>); after it, the meeting stays as saved.</summary>
     public void CancelJob(int id)
     {
         if (_jobCts.TryGetValue(id, out var cts))
@@ -855,9 +869,19 @@ internal sealed class HuginnEngine : IAsyncDisposable
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            HuginnLog.Write($"meeting {cap.Stamp}: cancelled by user after {sw.Elapsed:m\\:ss}");
-            Recent.SetStatus(jobId, "Cancelled", JobTone.Muted, cancelable: false);
-            Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "Cancelled"));
+            // A cancelled recording leaves nothing: no row, no file. Once its transcript is on disk it is no longer
+            // a cancelled recording: only the naming or the filing was stopped, and the meeting stays as saved.
+            if (MeetingFiles.Cancel(Recent, jobId, cap.Stamp))
+            {
+                HuginnLog.Write($"meeting {cap.Stamp}: cancelled by user after {sw.Elapsed:m\\:ss}; its row and its files are removed");
+                Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "Cancelled"));
+                _ = SweepLaterAsync(cap.Stamp);
+            }
+            else
+            {
+                HuginnLog.Write($"meeting {cap.Stamp}: stopped by user after {sw.Elapsed:m\\:ss}, with the transcript already written; it stays as saved");
+                Ui(() => _p.Notes.SetJobStatus(cap.Stamp, "✓ Transcript saved"));
+            }
         }
         catch (Exception ex)
         {

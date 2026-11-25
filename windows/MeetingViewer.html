@@ -164,6 +164,8 @@ function parseEvent(at, s) {
   if ((m = s.match(/^(.+?) reacted (.+)$/))) return { kind: "react", at, who: m[1], what: m[2] };
   if ((m = s.match(/^(.+?) (raised|lowered) a hand$/))) return { kind: m[2] === "raised" ? "hand-up" : "hand-down", at, who: m[1], what: "" };
   if ((m = s.match(/^(.+?) (started|stopped) sharing their screen$/))) return { kind: m[2] === "started" ? "share-start" : "share-stop", at, who: m[1], what: "" };
+  // "Ana entered the voice range", "Ana, Tom and Marta left the voice range": one line for people who came or went together.
+  if ((m = s.match(/^(.+) (entered|left) the voice range$/))) return { kind: m[2] === "entered" ? "range-in" : "range-out", at, who: "", names: m[1].split(/,\s*|\s+and\s+/).map((n) => n.trim()).filter(Boolean), what: "" };
   return { kind: "other", at, who: "", what: s };
 }
 function parseTranscript(raw) {
@@ -193,6 +195,7 @@ function parseTranscript(raw) {
     if (r.kind) {
       if (r.kind === "chat") chat.push(r);
       if (r.who) people.add(r.who);
+      for (const n of r.names || []) people.add(n);
       const last = items[items.length - 1];
       if (last && last.kind === "event") last.events.push(r); else items.push({ kind: "event", events: [r] });
       prev = null;
@@ -348,6 +351,11 @@ function eventGroup(events, start, colours, shotPrefix) {
       case "chat": return `<div class="mn-event is-chat"><div class="mn-event-line">${icon("chat")}${who(e)}<span>typed</span>${time(e)}</div><p class="mn-typed">${esc(e.what)}</p></div>`;
       case "hand-up": case "hand-down": return `<div class="mn-event"><span class="mn-emoji" aria-hidden="true">✋</span>${who(e)}<span>${e.kind === "hand-up" ? "raised a hand" : "lowered a hand"}</span>${time(e)}</div>`;
       case "share-start": case "share-stop": return `<div class="mn-event">${icon("screen")}${who(e)}<span>${e.kind === "share-start" ? "started sharing their screen" : "stopped sharing their screen"}</span>${time(e)}</div>`;
+      case "range-in": case "range-out": {
+        // Each name in its own colour, joined the way the line reads: "Ana, Tom and Marta".
+        const names = e.names.map((n, i) => `${i === 0 ? "" : i === e.names.length - 1 ? `<span>and</span>` : ""}<span class="mn-who"${whoStyle(colours, n)}>${esc(n)}${i < e.names.length - 2 ? "," : ""}</span>`).join("");
+        return `<div class="mn-event">${icon("users")}${names}<span>${e.kind === "range-in" ? "entered the voice range" : "left the voice range"}</span>${time(e)}</div>`;
+      }
       default: return `<div class="mn-event"><span>${esc(e.what)}</span>${time(e)}</div>`;
     }
   }).join("")}</div>`;

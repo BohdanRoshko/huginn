@@ -19,9 +19,12 @@ internal sealed class SpeakerTimeline
     public List<object[]> Remote { get; set; } = new();
     /// <summary>[offset ms, level]: my own level as Kumospace sends it.</summary>
     public List<object[]> Local { get; set; } = new();
-    /// <summary>[offset ms, kind, who, text]: reactions, hands, screen shares, chat, and snapshots ("shot", text =
-    /// the snapshot's name). The transcript step writes each as a line of its own.</summary>
+    /// <summary>[offset ms, kind, who, text]: reactions, hands, screen shares, chat, snapshots ("shot", text =
+    /// the snapshot's name), and who came into hearing and went out of it ("enter", "leave": <see cref="VoiceRange"/>).
+    /// The transcript step writes each as a line of its own.</summary>
     public List<object[]> Events { get; set; } = new();
+
+    private readonly VoiceRange _range = new();
 
     private readonly List<(long T, string Name, double Level)> _remote = new();
     private readonly List<(long T, double Level)> _local = new();
@@ -109,6 +112,10 @@ internal sealed class SpeakerTimeline
         }
         foreach (var shot in snap.Shots ?? Array.Empty<KumoShot>()) AddShot(shot, stamp);
         if (!string.IsNullOrEmpty(snap.Me?.Name)) Me = snap.Me!.Name;
+        // Who I can hear, read by read: the people whose audio reaches me, not everyone in the room list.
+        if (snap.PageTimeMs >= StartUnixMs)
+            foreach (var (at, kind, who) in _range.Read(snap.PageTimeMs - StartUnixMs, snap.Heard))
+                Events.Add(new object[] { at, kind, who, "" });
         if (snap.Zone.Length > 0 && !Rooms.Contains(snap.Zone)) Rooms.Add(snap.Zone);
         foreach (var p in snap.Company)
             if (p.Name.Length > 0 && !People.Contains(p.Name)) People.Add(p.Name);

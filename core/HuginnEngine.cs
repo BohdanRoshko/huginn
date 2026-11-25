@@ -944,6 +944,8 @@ internal sealed class HuginnEngine : IAsyncDisposable
                 ("source.txt", MeetingProcessor.SourcePathFor(cap.Stamp)), ("notes.md", cap.NotesPath), ("dictionary.txt", Paths.File("dictionary.txt")),
             };
             var far = await _worker!.ProcessAsync(cap.Stamp, cap.StartedLocal, files, MeetingOptions.Here(prompt: null), Show, ct);
+            // Who entered and left the voice range: written here when the build on the other computer did not write it.
+            far = far with { Text = MeetingProcessor.AddRangeLines(far.Text, SpeakerTimeline.Load(SpeakerTimeline.PathFor(cap.Stamp))) };
             var (path, rawPath) = await MeetingProcessor.SaveAsync(cap.Stamp, far.Text, far.RawText, ct);
             HuginnLog.Write($"meeting {cap.Stamp}: transcribed {far.Lines} segments on the other computer, {TimeSpan.FromSeconds(far.Seconds):m\\:ss} there, {sw.Elapsed:m\\:ss} with the sending -> {Path.GetFileName(path)}");
             HuginnLog.Write($"meeting {cap.Stamp}: echo gates: {far.Echo}{(rawPath == null ? "" : " (raw kept)")}");

@@ -306,7 +306,8 @@ internal static class MeetingProcessor
 
     /// <summary>Puts what people did into the transcript, each at its time, as a line that starts with "*":
     /// <c>[00:12:34] * Andy reacted 👍</c>, <c>* Andy raised a hand</c>, <c>* Andy typed: "…"</c>,
-    /// <c>* Andy started sharing their screen</c>, <c>* Snapshot of Andy's screen: shot-001.jpg</c>.
+    /// <c>* Andy started sharing their screen</c>, <c>* Snapshot of Andy's screen: shot-001.jpg</c>,
+    /// <c>* Andy entered the voice range</c>, <c>* Andy and Sam left the voice range</c>.
     /// The de-echo and the speaker names only read "Me"/"Them" lines, so these pass through both.</summary>
     internal static string AddEvents(string text, IReadOnlyList<object[]> events)
     {
@@ -319,6 +320,23 @@ internal static class MeetingProcessor
         }
         var ordered = events.Select(e => (off: Convert.ToInt64(e[0]), kind: e[1]?.ToString() ?? "", who: e[2]?.ToString() ?? "", what: e[3]?.ToString() ?? ""))
             .OrderBy(e => e.off).ToList();
+        // People who come or go together are one line: a room that empties is "A, B and C left", not three lines.
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            var first = ordered[i];
+            if (first.kind is not (VoiceRange.Entered or VoiceRange.Left) || first.who.Length == 0) continue;
+            var names = new List<string> { first.who };
+            for (int j = i + 1; j < ordered.Count && ordered[j].off - first.off <= RangeTogetherMs; )
+            {
+                if (ordered[j].kind == first.kind && ordered[j].who.Length > 0)
+                {
+                    if (!names.Contains(ordered[j].who)) names.Add(ordered[j].who);
+                    ordered.RemoveAt(j);
+                }
+                else j++;
+            }
+            ordered[i] = (first.off, first.kind, NameList(names), first.what);
+        }
         int at = lines.FindIndex(l => Sec(l) >= 0);
         if (at < 0)
         {
@@ -338,8 +356,31 @@ internal static class MeetingProcessor
         return string.Join("\n", lines) + "\n";
     }
 
+    private const int RangeTogetherMs = 3000;
+
+    /// <summary>The lines that say who entered and who left the voice range (<see cref="VoiceRange"/>), added to a
+    /// transcript that lacks them: one made by a build that did not know them yet, on another computer. A transcript
+    /// that already has such a line, or a recording with no such change, comes back as it was.</summary>
+    internal static string AddRangeLines(string text, SpeakerTimeline? timeline)
+    {
+        var range = timeline?.Events.Where(e => e[1]?.ToString() is VoiceRange.Entered or VoiceRange.Left).ToList();
+        if (range == null || range.Count == 0) return text;
+        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^\[\d{1,2}:\d{2}:\d{2}\] \* .+ (entered|left) the voice range\r?$", System.Text.RegularExpressions.RegexOptions.Multiline)) return text;
+        return AddEvents(text, range);
+    }
+
+    // "Ana", "Ana and Tom", "Ana, Tom and Marta".
+    private static string NameList(IReadOnlyList<string> names) => names.Count switch
+    {
+        1 => names[0],
+        2 => $"{names[0]} and {names[1]}",
+        _ => $"{string.Join(", ", names.Take(names.Count - 1))} and {names[^1]}",
+    };
+
     private static string? EventLine(string kind, string who, string what) => kind switch
     {
+        VoiceRange.Entered => $"{who} entered the voice range",
+        VoiceRange.Left => $"{who} left the voice range",
         "react" when what.Length > 0 => $"{who} reacted {what}",
         "hand-up" => $"{who} raised a hand",
         "hand-down" => $"{who} lowered a hand",

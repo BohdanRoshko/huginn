@@ -8,6 +8,8 @@ namespace Huginn;
 /// focusing, away (Kumospace's own values), "not in space", "closed" (Kumospace not running), "unknown", "off"
 /// (Huginn quit). A state lasts until the next line, at most <see cref="MaxGap"/> (after that Huginn was not
 /// running, so the time is not counted), and never past midnight.
+/// The timer is kept only where an Odin is set up (<see cref="HuginnEngine.HasOdin"/>): for anyone else nothing
+/// is written and no menu shows hours, so nobody gets a log of their hours they did not ask for.
 /// </summary>
 internal sealed class PresenceLog
 {
@@ -15,13 +17,16 @@ internal sealed class PresenceLog
     public static readonly TimeSpan MaxGap = TimeSpan.FromMinutes(6);
 
     private readonly string _dir;
+    private readonly bool _enabled;
     private string? _state;
     private DateTime _lastWrite;
 
-    public PresenceLog(string dir) => _dir = dir;
+    /// <param name="enabled">False: <see cref="Observe"/> writes nothing, not even the folder.</param>
+    public PresenceLog(string dir, bool enabled = true) { _dir = dir; _enabled = enabled; }
 
     public void Observe(DateTime now, string state)
     {
+        if (!_enabled) return;
         bool newDay = _state != null && now.Date != _lastWrite.Date;
         if (newDay && now - _lastWrite <= MaxGap) Append(now.Date, _state!); // carry the state over midnight
         if (state == _state && !newDay && now - _lastWrite < Heartbeat) return;
@@ -81,12 +86,30 @@ internal sealed class PresenceLog
         return parts.Count == 0 ? "nothing yet" : string.Join(" · ", parts);
     }
 
+    /// <summary>The Monday of the week <paramref name="now"/> is in.</summary>
+    private static DateTime MondayOf(DateTime now) => now.Date.AddDays(-(((int)now.DayOfWeek + 6) % 7));
+
+    /// <summary>Time per state over the week of <paramref name="now"/>, Monday up to now: the days of
+    /// <see cref="Week"/> added up. Today's open state counts up to <paramref name="now"/>, as in the day's line.</summary>
+    public static Dictionary<string, TimeSpan> WeekTotals(string dir, DateTime now)
+    {
+        var sum = new Dictionary<string, TimeSpan>();
+        for (var day = MondayOf(now); day <= now.Date; day = day.AddDays(1))
+            foreach (var (state, t) in Totals(dir, day, now))
+                sum[state] = sum.GetValueOrDefault(state) + t;
+        return sum;
+    }
+
+    /// <summary>The menu line under the days: "This week:  23h 40m available · 3h 10m focusing · 4h 05m away".</summary>
+    public static string WeekTotalLine(string dir, DateTime now) =>
+        "This week:  " + Describe(WeekTotals(dir, now), withAway: true);
+
     /// <summary>The week of <paramref name="now"/>, Monday to Sunday like a calendar, one menu line per day: each day
     /// by its date, today as "Today", future and empty past days "—", with away time too.</summary>
     public static IReadOnlyList<string> Week(string dir, DateTime now)
     {
         var today = now.Date;
-        var monday = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
+        var monday = MondayOf(now);
         var list = new List<string>();
         for (int i = 0; i < 7; i++)
         {

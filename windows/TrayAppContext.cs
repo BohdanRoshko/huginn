@@ -253,7 +253,7 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _presenceItem = new ToolStripMenuItem("Kumospace today: nothing yet");
         _presenceItem.DropDownItems.Add(new ToolStripMenuItem("…") { Enabled = false });
         _presenceItem.DropDownOpening += (_, _) => FillPresenceDays();
-        menu.Items.Add(_presenceItem);
+        if (_engine.TracksHours) menu.Items.Add(_presenceItem); // the hours are kept and shown only with an Odin set up
         _panelItem = new ToolStripMenuItem("Show recorder panel", null, (_, _) => TogglePanel()) { Checked = Settings.MeetingPanelVisible };
         menu.Items.Add(_panelItem);
         var notesMenu = new ToolStripMenuItem("Notes window");
@@ -350,6 +350,8 @@ internal sealed class TrayAppContext : ApplicationContext, IShell
         _presenceItem.DropDownItems.Clear();
         foreach (var line in _engine.PresenceWeek())
             _presenceItem.DropDownItems.Add(new ToolStripMenuItem(line) { Enabled = false });
+        _presenceItem.DropDownItems.Add(new ToolStripSeparator());
+        _presenceItem.DropDownItems.Add(new ToolStripMenuItem(_engine.PresenceWeekTotal()) { Enabled = false });
         _presenceItem.DropDownItems.Add(new ToolStripSeparator());
         _presenceItem.DropDownItems.Add(new ToolStripMenuItem("Open the presence folder", null, (_, _) =>
         {

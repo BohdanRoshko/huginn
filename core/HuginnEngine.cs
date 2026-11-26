@@ -25,7 +25,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
     private readonly WorkerClient? _worker = WorkerClient.FromSettings(); // another computer transcribes the meetings; null = this one
     private readonly KumoMeetingDetector _detector;
     private readonly ConcurrentQueue<KumoSnapshot> _kumoReads = new();
-    private readonly PresenceLog _presence = new(Paths.PresenceDir());
+    private readonly PresenceLog _presence; // the work timer; kept only with an Odin set up (see TracksHours)
     private Timer? _kumoTimer;
     private Timer? _callTimer;
     private readonly CallDetector _calls = new();
@@ -72,6 +72,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
         DictationEnabled = Settings.DictationEnabled;
         CleanupEnabled = Settings.CleanupEnabled;
         HasOdin = !string.IsNullOrWhiteSpace(s.OdinBaseUrl);
+        _presence = new PresenceLog(Paths.PresenceDir(), enabled: TracksHours);
         SendMeetings = HasOdin && Settings.SendMeetingsToOdin;
         NotesMode = Settings.NotesMode;
         _p.Dictation.Device = Settings.Microphone;
@@ -124,6 +125,9 @@ internal sealed class HuginnEngine : IAsyncDisposable
     /// <summary>The Kumospace status line is a button: it restarts Kumospace with the port.</summary>
     public bool KumoRestartAvailable { get; private set; }
     public string PresenceTodayText { get; private set; } = "Kumospace today: nothing yet";
+    /// <summary>The Kumospace work timer runs and its hours show in the menu. Only where an Odin is set up, the same
+    /// check that hides the Odin items: for anyone else no hours are shown and none are written to disk.</summary>
+    public bool TracksHours => HasOdin;
     public DateTime? MeetingStartedLocal => _current?.StartedLocal;
 
     /// <summary>The menu line for the recordings folder: "Recordings: 3.2 GB" (audio, snapshots, transcripts).</summary>
@@ -1194,6 +1198,7 @@ internal sealed class HuginnEngine : IAsyncDisposable
             _ when !snap.InSpace => "not in space",
             _ => snap.Availability.Length > 0 ? snap.Availability : "unknown",
         };
+        if (!TracksHours) return; // no hours kept for this user: nothing written, nothing to show
         _presence.Observe(DateTime.Now, state);
         if (_presenceRefresh++ % 30 == 0) // the menu line, every 30 s
         {
@@ -1205,6 +1210,9 @@ internal sealed class HuginnEngine : IAsyncDisposable
     /// <summary>The current week, Monday to Sunday like a calendar: each day by its date, today as "Today",
     /// future days "—", with away time too.</summary>
     public IReadOnlyList<string> PresenceWeek() => PresenceLog.Week(Paths.PresenceDir(), DateTime.Now);
+
+    /// <summary>The line under the days: the week's hours added up, "This week:  23h 40m available · …".</summary>
+    public string PresenceWeekTotal() => PresenceLog.WeekTotalLine(Paths.PresenceDir(), DateTime.Now);
 
     private void HandleKumoRead(long now, KumoSnapshot? snap)
     {

@@ -57,7 +57,7 @@ Windows `%LOCALAPPDATA%\Huginn`, Mac `~/Library/Application Support/Huginn`:
 - the Whisper models (downloaded once on first use), `settings.json`, the switch files (`dictation.txt`, `cleanup.txt`, …)
 - `huginn.log`: every meeting job, failure and Kumospace change
 - `Meetings/`: WAV tracks, notes, speaker timelines, transcripts, `recent.json`
-- `Presence/`: the work timer, one file per day
+- `Presence/`: the work timer, one file per day (kept only when an Odin is set up; otherwise no hours are written or shown)
 - `quit.flag`: another app writes it to make Huginn save and exit
 
 On its first start the Windows app renamed `%LOCALAPPDATA%\Munin` to `%LOCALAPPDATA%\Huginn` (same drive, nothing

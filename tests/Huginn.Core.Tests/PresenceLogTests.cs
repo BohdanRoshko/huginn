@@ -75,4 +75,50 @@ public class PresenceLogTests
         Assert.Equal("Today:  nothing yet", week[2]);
         Assert.Equal("Sun 22 Nov:  —", week[6]);
     }
+
+    [Fact]
+    public void TheWeekTotalAddsTheDaysFromMondayUpToNow()
+    {
+        var dir = TestData.NewDir();
+        Day(dir, "2026-11-15", "09:00:00\tavailable", "09:05:00\tclosed");                     // the Sunday before: not this week
+        Day(dir, "2026-11-16", "09:00:00\tavailable", "09:05:00\tfocusing", "09:10:00\taway", "09:15:00\tclosed");
+        Day(dir, "2026-11-17", "10:00:00\tavailable", "10:05:00\tavailable", "10:10:00\tclosed");
+        Day(dir, "2026-11-18", "11:58:00\tavailable");                                         // today, still open
+        var now = new DateTime(2026, 11, 18, 12, 0, 0); // a Wednesday
+
+        var week = PresenceLog.WeekTotals(dir, now);
+        Assert.Equal(TimeSpan.FromMinutes(5 + 10 + 2), week["available"]); // Monday 5, Tuesday 10, today 2 up to now
+        Assert.Equal(TimeSpan.FromMinutes(5), week["focusing"]);
+        Assert.Equal(TimeSpan.FromMinutes(5), week["away"]);
+        Assert.Equal("This week:  17m available · 5m focusing · 5m away", PresenceLog.WeekTotalLine(dir, now));
+
+        // The same days as the day lines: their available minutes add up to the week's.
+        Assert.Equal(new[] { "Mon 16 Nov:  5m available · 5m focusing · 5m away", "Tue 17 Nov:  10m available", "Today:  2m available" },
+            PresenceLog.Week(dir, now).Take(3));
+    }
+
+    [Fact]
+    public void TheWeekTotalReadsInHoursAndIsEmptyOnAMondayMorning()
+    {
+        var dir = TestData.NewDir();
+        var rows = new List<string>();
+        for (var t = new TimeSpan(8, 0, 0); t < new TimeSpan(17, 30, 0); t += TimeSpan.FromMinutes(5)) rows.Add($"{t:hh\\:mm\\:ss}\tavailable");
+        rows.Add("17:30:00\tclosed");
+        foreach (var day in new[] { "2026-11-16", "2026-11-17" }) Day(dir, day, rows.ToArray());
+        Assert.Equal("This week:  19h 00m available", PresenceLog.WeekTotalLine(dir, new DateTime(2026, 11, 18, 7, 0, 0)));
+        Assert.Equal("This week:  nothing yet", PresenceLog.WeekTotalLine(TestData.NewDir(), new DateTime(2026, 11, 16, 7, 0, 0)));
+    }
+
+    [Fact]
+    public void WithoutAnOdinNoHoursAreWritten()
+    {
+        // The timer is for the one user who has an Odin; for anyone else it leaves nothing on disk.
+        var dir = Path.Combine(TestData.NewDir(), "Presence");
+        var log = new PresenceLog(dir, enabled: false);
+        var at = new DateTime(2026, 11, 18, 10, 0, 0);
+        log.Observe(at, "available");
+        log.Observe(at.AddMinutes(10), "away");
+        log.Observe(at.AddDays(1), "off");
+        Assert.False(Directory.Exists(dir));
+    }
 }

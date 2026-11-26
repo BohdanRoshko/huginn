@@ -272,7 +272,7 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
             var kumo = Item(_engine.KumoStatusText, () => _ = _engine.RestartKumoAsync());
             kumo.Enabled = _engine.KumoRestartAvailable;
             m.AddItem(kumo);
-            m.AddItem(Sub(_engine.PresenceTodayText, PresenceMenu()));
+            if (_engine.TracksHours) m.AddItem(Sub(_engine.PresenceTodayText, PresenceMenu())); // hours: only with an Odin set up
         }
 
         m.AddItem(Sub("Meeting Detection", CallsMenu()));
@@ -374,6 +374,8 @@ internal sealed class AppDelegate : NSApplicationDelegate, IShell
     {
         var menu = new NSMenu { AutoEnablesItems = false };
         foreach (var line in _engine.PresenceWeek()) menu.AddItem(Item(line));
+        menu.AddItem(NSMenuItem.SeparatorItem);
+        menu.AddItem(Item(_engine.PresenceWeekTotal()));
         menu.AddItem(NSMenuItem.SeparatorItem);
         menu.AddItem(Item("Open the Presence Folder", () => { Directory.CreateDirectory(Paths.PresenceDir()); MacUi.Open(Paths.PresenceDir()); }));
         return menu;
